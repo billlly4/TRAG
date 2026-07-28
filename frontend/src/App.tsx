@@ -10,12 +10,13 @@ function Chat({ email, onSignOut }: { email?: string; onSignOut: () => void }) {
   const chat = useChat()
 
   return (
-    <div className="flex h-full">
+    // overflow-hidden pins the app to the viewport: the ONLY scroll containers
+    // are the message list and the sidebar list, never the page itself.
+    <div className="flex h-full overflow-hidden">
       <Sidebar
         threads={chat.threads}
         activeId={chat.activeId}
         documents={chat.documents}
-        documentsInThread={chat.documentsInThread}
         email={email}
         onSelect={chat.setActiveId}
         onNew={() => void chat.newThread()}
@@ -25,21 +26,20 @@ function Chat({ email, onSignOut }: { email?: string; onSignOut: () => void }) {
         onSignOut={onSignOut}
       />
 
-      <main className="flex flex-1 flex-col bg-zinc-100 dark:bg-zinc-950">
+      <main className="flex min-w-0 flex-1 flex-col bg-zinc-100 dark:bg-zinc-950">
         {/* Drop anywhere over the conversation, not just on a small target. */}
         <DropZone onFiles={(files) => void chat.upload(files)}>
           <MessageList
             messages={chat.messages}
             streamText={chat.streamText}
             streaming={chat.streaming}
+            liveTools={chat.liveTools}
             error={chat.error}
             truncated={chat.truncated}
           />
           <Composer
-            documents={chat.documents}
-            documentsInThread={chat.documentsInThread}
             streaming={chat.streaming}
-            onSend={(text, ids) => void chat.send(text, ids)}
+            onSend={(text) => void chat.send(text)}
             onStop={chat.stop}
           />
         </DropZone>

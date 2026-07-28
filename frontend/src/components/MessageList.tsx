@@ -1,7 +1,14 @@
 import { useEffect, useRef } from 'react'
 
-import type { Message } from '../lib/types'
-import { blocksToCitations, blocksToText } from '../lib/types'
+import type { LiveTool } from '../hooks/useChat'
+import type { Message, Source } from '../lib/types'
+import {
+  blocksToCitations,
+  blocksToText,
+  isToolResultMessage,
+  toolQueries,
+  toolSources,
+} from '../lib/types'
 import { Banner } from './ui'
 
 function Bubble({
@@ -27,6 +34,52 @@ function Bubble({
   )
 }
 
+/** "Searched documents: …" marker for an assistant turn's tool calls. */
+function SearchMarker({ query, pending }: { query: string; pending?: boolean }) {
+  return (
+    <p className="my-1 text-xs text-zinc-500 dark:text-zinc-400">
+      {pending ? (
+        <>
+          <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-500 align-middle" />
+          Searching documents… <span className="italic">&ldquo;{query}&rdquo;</span>
+        </>
+      ) : (
+        <>
+          🔍 Searched documents: <span className="italic">&ldquo;{query}&rdquo;</span>
+        </>
+      )}
+    </p>
+  )
+}
+
+/** Collapsible list of retrieved passages (filename, ordinal, similarity). */
+function SourceList({ sources }: { sources: Source[] }) {
+  if (sources.length === 0) {
+    return (
+      <p className="my-1 text-xs text-zinc-400">No relevant passages found.</p>
+    )
+  }
+  return (
+    <details className="my-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <summary className="cursor-pointer select-none">
+        {sources.length} source{sources.length === 1 ? '' : 's'}
+      </summary>
+      <ol className="mt-1 space-y-0.5 border-l-2 border-zinc-200 pl-3 dark:border-zinc-700">
+        {sources.map((s, i) => (
+          <li key={i}>
+            <span className="font-medium">{s.filename}</span>
+            {' · chunk '}
+            {s.ordinal}
+            {' · similarity '}
+            {s.similarity.toFixed(3)}
+          </li>
+        ))}
+      </ol>
+    </details>
+  )
+}
+
+/** Citation spans only exist on Module 1 answers; kept so old threads render. */
 function Citations({ message }: { message: Message }) {
   const cites = blocksToCitations(message.content)
   if (cites.length === 0) return null
@@ -60,12 +113,14 @@ export function MessageList({
   messages,
   streamText,
   streaming,
+  liveTools,
   error,
   truncated,
 }: {
   messages: Message[]
   streamText: string
   streaming: boolean
+  liveTools: LiveTool[]
   error: string | null
   truncated: boolean
 }) {
@@ -73,22 +128,47 @@ export function MessageList({
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length, streamText])
+  }, [messages.length, streamText, liveTools.length])
 
   return (
-    <div className="flex-1 space-y-4 overflow-y-auto p-6">
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-6">
       {messages.length === 0 && !streaming && (
         <p className="pt-12 text-center text-sm text-zinc-400">
-          Ask a question. Attach a document to ground the answer.
+          Ask a question. Uploaded documents are searched automatically.
         </p>
       )}
 
-      {messages.map((m) => (
-        <div key={m.id}>
-          <Bubble role={m.role}>{blocksToText(m.content)}</Bubble>
-          {m.role === 'assistant' && <Citations message={m} />}
-        </div>
-      ))}
+      {messages.map((m) => {
+        // Synthetic user turns that only carry tool results render as a
+        // source list, not as something the user said.
+        if (m.role === 'user' && isToolResultMessage(m)) {
+          return <SourceList key={m.id} sources={toolSources(m.content)} />
+        }
+
+        const text = blocksToText(m.content)
+        const queries = m.role === 'assistant' ? toolQueries(m.content) : []
+        return (
+          <div key={m.id}>
+            {queries.map((q, i) => (
+              <SearchMarker key={i} query={q} />
+            ))}
+            {text && <Bubble role={m.role}>{text}</Bubble>}
+            {m.role === 'assistant' && <Citations message={m} />}
+          </div>
+        )
+      })}
+
+      {/* Live tool activity for the in-flight turn */}
+      {streaming &&
+        liveTools.map((t, i) => (
+          <div key={i}>
+            <SearchMarker query={t.query} pending={t.sources === null} />
+            {t.sources !== null && !t.isError && <SourceList sources={t.sources} />}
+            {t.isError && (
+              <p className="my-1 text-xs text-red-500">Search failed.</p>
+            )}
+          </div>
+        ))}
 
       {streaming && streamText && (
         <Bubble role="assistant">
@@ -97,7 +177,7 @@ export function MessageList({
         </Bubble>
       )}
 
-      {streaming && !streamText && (
+      {streaming && !streamText && liveTools.length === 0 && (
         <p className="text-sm text-zinc-400">Thinking…</p>
       )}
 

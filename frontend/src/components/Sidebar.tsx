@@ -3,11 +3,41 @@ import { useRef, useState } from 'react'
 import type { DocumentMeta, Thread } from '../lib/types'
 import { Button, cx } from './ui'
 
+/**
+ * Ingestion status badge. The transitions arrive over Supabase Realtime as the
+ * backend walks pending -> extracting -> chunking -> embedding -> ready, so
+ * this advances live without a refresh.
+ */
+function StatusBadge({ doc }: { doc: DocumentMeta }) {
+  if (doc.status === 'ready') {
+    return (
+      <p className="text-xs text-emerald-600 dark:text-emerald-400">
+        ready · {doc.chunk_count ?? 0} chunks
+      </p>
+    )
+  }
+  if (doc.status === 'failed') {
+    return (
+      <p
+        className="truncate text-xs text-red-600 dark:text-red-400"
+        title={doc.error ?? undefined}
+      >
+        failed{doc.error ? ` · ${doc.error}` : ''}
+      </p>
+    )
+  }
+  return (
+    <p className="text-xs text-zinc-400">
+      <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500 align-middle" />
+      {doc.status}…
+    </p>
+  )
+}
+
 export function Sidebar({
   threads,
   activeId,
   documents,
-  documentsInThread,
   email,
   onSelect,
   onNew,
@@ -19,7 +49,6 @@ export function Sidebar({
   threads: Thread[]
   activeId: string | null
   documents: DocumentMeta[]
-  documentsInThread: Set<string>
   email?: string
   onSelect: (id: string) => void
   onNew: () => void
@@ -48,7 +77,7 @@ export function Sidebar({
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2">
         <p className="px-2 py-1 text-xs font-medium tracking-wide text-zinc-400 uppercase">
           Threads
         </p>
@@ -93,21 +122,9 @@ export function Sidebar({
           <div key={d.id} className="group flex items-center rounded-lg px-2.5 py-1.5">
             <div className="flex-1 truncate">
               <p className="truncate text-sm text-zinc-700 dark:text-zinc-300">
-                {documentsInThread.has(d.id) && (
-                  <span
-                    title="In this conversation's context"
-                    className="mr-1 text-emerald-600 dark:text-emerald-400"
-                  >
-                    ●
-                  </span>
-                )}
                 {d.filename}
               </p>
-              {d.token_estimate != null && (
-                <p className="text-xs text-zinc-400">
-                  {d.token_estimate.toLocaleString()} tokens
-                </p>
-              )}
+              <StatusBadge doc={d} />
             </div>
             <button
               onClick={() => onDeleteDocument(d.id)}
@@ -124,7 +141,7 @@ export function Sidebar({
           type="file"
           hidden
           multiple
-          accept=".pdf,.txt,.md,.json,.xml"
+          accept=".pdf,.docx,.html,.md,.txt"
           onChange={pick}
         />
         <Button

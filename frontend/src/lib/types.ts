@@ -35,19 +35,49 @@ export interface Thread {
   updated_at: string
 }
 
+/** Ingestion pipeline states, pushed live over Supabase Realtime. */
+export type DocumentStatus =
+  | 'pending'
+  | 'extracting'
+  | 'chunking'
+  | 'embedding'
+  | 'ready'
+  | 'failed'
+
 export interface DocumentMeta {
   id: string
   filename: string
   mime_type: string | null
   byte_size: number | null
-  token_estimate: number | null
   created_at: string
-  anthropic_file_id: string
+  status: DocumentStatus
+  error: string | null
+  chunk_count: number | null
+}
+
+/** One retrieved passage, as attached to a tool_result block. */
+export interface Source {
+  document_id: string
+  filename: string
+  ordinal: number
+  similarity: number
 }
 
 /** Frames emitted by POST /api/chat over SSE. */
 export type ChatFrame =
   | { type: 'delta'; text: string }
+  | {
+      type: 'tool_use'
+      id: string
+      name: string
+      input: { query?: string; top_k?: number }
+    }
+  | {
+      type: 'tool_result'
+      tool_use_id: string
+      sources: Source[]
+      is_error: boolean
+    }
   | {
       type: 'done'
       message_id: string
@@ -70,22 +100,22 @@ export function blocksToCitations(content: ContentBlock[]): Citation[] {
   return content.filter(isTextBlock).flatMap((b) => b.citations ?? [])
 }
 
-/**
- * File ids already present in a thread's history.
- *
- * A document attached on an earlier turn is replayed on every subsequent call
- * -- that is what keeps the cached prefix stable. Attaching it again would put
- * the same text in context twice and invalidate the cache, so the UI uses this
- * to mark those documents as already in context rather than re-attachable.
- */
-export function fileIdsInThread(messages: Message[]): Set<string> {
-  const ids = new Set<string>()
-  for (const message of messages) {
-    for (const block of message.content) {
-      if (block.type !== 'document') continue
-      const source = (block as { source?: { file_id?: string } }).source
-      if (source?.file_id) ids.add(source.file_id)
-    }
-  }
-  return ids
+/** Search queries issued by an assistant turn (its tool_use blocks). */
+export function toolQueries(content: ContentBlock[]): string[] {
+  return content
+    .filter((b) => b.type === 'tool_use')
+    .map((b) => ((b as { input?: { query?: string } }).input?.query ?? '').trim())
+    .filter(Boolean)
+}
+
+/** Retrieved sources carried by a message's tool_result blocks. */
+export function toolSources(content: ContentBlock[]): Source[] {
+  return content
+    .filter((b) => b.type === 'tool_result')
+    .flatMap((b) => ((b as { sources?: Source[] }).sources ?? []))
+}
+
+/** True for the synthetic user turns that only carry tool results. */
+export function isToolResultMessage(m: Message): boolean {
+  return m.content.length > 0 && m.content.every((b) => b.type === 'tool_result')
 }

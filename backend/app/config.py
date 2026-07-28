@@ -47,10 +47,34 @@ class Settings(BaseSettings):
     # and is not a cost control -- you pay for tokens generated, not the limit.
     max_output_tokens: int = 8192
 
-    # Rejects oversized uploads at ingest. Without this the failure surfaces as
-    # a context-window 400 mid-conversation, long after the upload "succeeded".
-    # Deliberately below the 200k window to leave room for history and output.
-    max_document_tokens: int = 150_000
+    # Bounds ingestion work (extraction + embedding time), not context. The old
+    # max_document_tokens gate is gone: chunking is exactly what removed the
+    # context ceiling it guarded against.
+    max_upload_bytes: int = 26_214_400  # 25 MB
+
+    # Anthropic has no embeddings endpoint, so embeddings come from Ollama.
+    # EMBEDDING_DIM must match the vector(768) column in 0002_retrieval.sql --
+    # changing the model means a new migration and re-embedding the corpus.
+    ollama_base_url: str = "http://localhost:11434"
+    embedding_model: str = "nomic-embed-text"
+    embedding_dim: int = 768
+
+    # VLM captioning of figures during extraction. Off = much faster ingest,
+    # but charts become unsearchable.
+    vlm_model: str = "qwen2.5vl:7b"
+    describe_pictures: bool = True
+
+    # 800 tokens is chosen for retrieval precision, not model limits -- the
+    # embedding model's 8192-token window is 10x this target.
+    chunk_target_tokens: int = 800
+    chunk_overlap_tokens: int = 120
+
+    retrieval_top_k: int = 5
+
+    # A guess. Do not tune without a golden-set run (Module 9); log scores now.
+    retrieval_min_similarity: float = 0.30
+
+    max_tool_turns: int = 5
 
     @property
     def jwks_url(self) -> str:

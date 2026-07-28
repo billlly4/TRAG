@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import * as api from '../lib/api'
-import { fileIdsInThread } from '../lib/types'
-import type { DocumentMeta, Message, Thread } from '../lib/types'
+import { supabase } from '../lib/supabase'
+import type { DocumentMeta, Message, Source, Thread } from '../lib/types'
+
+/** A search the assistant is running (or has run) during the live turn. */
+export interface LiveTool {
+  query: string
+  /** null while the search is still executing */
+  sources: Source[] | null
+  isError: boolean
+}
 
 export function useChat() {
   const [threads, setThreads] = useState<Thread[]>([])
@@ -12,6 +20,7 @@ export function useChat() {
 
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
+  const [liveTools, setLiveTools] = useState<LiveTool[]>([])
   const [error, setError] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
 
@@ -29,6 +38,35 @@ export function useChat() {
     refreshThreads().catch((e) => setError(String(e)))
     refreshDocuments().catch((e) => setError(String(e)))
   }, [refreshThreads, refreshDocuments])
+
+  // Ingestion status arrives by Realtime push, not polling: the backend writes
+  // documents.status at each pipeline transition and Postgres publishes the
+  // change. RLS scopes events to this user's rows.
+  useEffect(() => {
+    const channel = supabase
+      .channel('documents-status')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'documents' },
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            const old = payload.old as { id?: string }
+            if (old.id) setDocuments((prev) => prev.filter((d) => d.id !== old.id))
+            return
+          }
+          const row = payload.new as DocumentMeta
+          setDocuments((prev) =>
+            prev.some((d) => d.id === row.id)
+              ? prev.map((d) => (d.id === row.id ? { ...d, ...row } : d))
+              : [row, ...prev],
+          )
+        },
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [])
 
   // Loading a thread refetches from the backend rather than trusting local
   // state: the transcript lives in Postgres, and this is the path that proves
@@ -58,7 +96,7 @@ export function useChat() {
   )
 
   const send = useCallback(
-    async (text: string, documentIds: string[]) => {
+    async (text: string) => {
       let threadId = activeId
       if (!threadId) threadId = (await newThread()).id
 
@@ -66,6 +104,7 @@ export function useChat() {
       setTruncated(false)
       setStreaming(true)
       setStreamText('')
+      setLiveTools([])
 
       // Optimistic user message so the input clears and the turn appears
       // immediately, matching what the backend has already persisted.
@@ -86,29 +125,42 @@ export function useChat() {
       await api.streamChat(
         threadId,
         text,
-        documentIds,
         {
           onDelta: (chunk) => setStreamText((prev) => prev + chunk),
+          onToolUse: (frame) =>
+            setLiveTools((prev) => [
+              ...prev,
+              { query: frame.input.query ?? '', sources: null, isError: false },
+            ]),
+          onToolResult: (frame) =>
+            setLiveTools((prev) => {
+              const next = [...prev]
+              for (let i = next.length - 1; i >= 0; i--) {
+                if (next[i].sources === null) {
+                  next[i] = {
+                    ...next[i],
+                    sources: frame.sources,
+                    isError: frame.is_error,
+                  }
+                  break
+                }
+              }
+              return next
+            }),
           onDone: (frame) => {
             setTruncated(frame.truncated)
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: frame.message_id,
-                thread_id: threadId,
-                role: 'assistant',
-                content: frame.content,
-                stop_reason: frame.stop_reason,
-                usage: frame.usage,
-                created_at: new Date().toISOString(),
-              },
-            ])
+            // A tool-using turn persisted several rows (assistant tool call,
+            // tool results, final answer), so refetch the transcript rather
+            // than appending just the last message.
+            api.listMessages(threadId).then(setMessages).catch(() => {})
             setStreamText('')
+            setLiveTools([])
             refreshThreads().catch(() => {})
           },
           onError: (detail) => {
             setError(detail)
             setStreamText('')
+            setLiveTools([])
           },
         },
         controller.signal,
@@ -121,16 +173,6 @@ export function useChat() {
   )
 
   const stop = useCallback(() => abortRef.current?.abort(), [])
-
-  // Documents whose text is already in this thread's context. Derived from the
-  // messages rather than tracked separately, so it stays correct after a
-  // reload -- the history is the source of truth.
-  const documentsInThread = useMemo(() => {
-    const fileIds = fileIdsInThread(messages)
-    return new Set(
-      documents.filter((d) => fileIds.has(d.anthropic_file_id)).map((d) => d.id),
-    )
-  }, [messages, documents])
 
   const upload = useCallback(async (files: File | File[]) => {
     setError(null)
@@ -147,7 +189,13 @@ export function useChat() {
       }
     }
 
-    if (uploaded.length > 0) setDocuments((prev) => [...uploaded, ...prev])
+    // Realtime will also announce these inserts; the merge in the subscription
+    // handler de-duplicates by id, so adding them here is just lower latency.
+    if (uploaded.length > 0)
+      setDocuments((prev) => [
+        ...uploaded.filter((u) => !prev.some((d) => d.id === u.id)),
+        ...prev,
+      ])
     return uploaded
   }, [])
 
@@ -157,8 +205,8 @@ export function useChat() {
   }, [])
 
   return {
-    threads, activeId, setActiveId, messages, documents, documentsInThread,
-    streaming, streamText, error, truncated,
+    threads, activeId, setActiveId, messages, documents,
+    streaming, streamText, liveTools, error, truncated,
     newThread, removeThread, send, stop, upload, removeDocument,
   }
 }

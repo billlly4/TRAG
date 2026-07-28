@@ -12,11 +12,6 @@ from langsmith.wrappers import wrap_anthropic
 
 from .config import Settings, get_settings
 
-# Required for `document` blocks that reference an uploaded file by id. Set as a
-# client default so the standard `client.messages.*` path keeps working -- going
-# through `client.beta.messages.*` instead would bypass the LangSmith wrapper.
-FILES_API_BETA = "files-api-2025-04-14"
-
 _client: Anthropic | None = None
 
 
@@ -42,10 +37,7 @@ def get_client() -> Anthropic:
         settings = get_settings()
         _export_langsmith_env(settings)
 
-        base = Anthropic(
-            api_key=settings.anthropic_api_key,
-            default_headers={"anthropic-beta": FILES_API_BETA},
-        )
+        base = Anthropic(api_key=settings.anthropic_api_key)
         _client = wrap_anthropic(base) if settings.langsmith_tracing else base
     return _client
 
@@ -100,28 +92,14 @@ def sanitize_for_api(content: list[dict]) -> list[dict]:
     return out
 
 
-def document_block(file_id: str, *, cache: bool = False) -> dict:
-    """A `document` content block referencing an uploaded file.
-
-    `citations` makes Claude return page-level spans for claims it draws from
-    the document -- attribution without a retrieval layer.
-
-    `cache_control` marks the end of a cacheable prefix. It belongs on the LAST
-    document block, with the varying question text after it. Reversed, every
-    question writes a fresh cache entry and nothing is ever read back.
-    """
-    block: dict = {
-        "type": "document",
-        "source": {"type": "file", "file_id": file_id},
-        "citations": {"enabled": True},
-    }
-    if cache:
-        block["cache_control"] = {"type": "ephemeral"}
-    return block
-
-
 SYSTEM_PROMPT = (
-    "You are a helpful research assistant. Answer using the documents provided "
-    "in the conversation when they are relevant, and cite them. If the documents "
-    "do not contain the answer, say so plainly rather than guessing."
+    "You are a helpful research assistant. The user's uploaded documents are "
+    "searchable with the search_documents tool -- they are NOT in your context. "
+    "When a question might depend on their documents, your FIRST action is the "
+    "tool call -- write no text before it. Never say what you do or don't have "
+    "before searching; the UI already shows the search. "
+    "Answer from the passages returned, naming the source file. If the search "
+    "finds nothing relevant, say so plainly rather than answering from memory. "
+    "For questions clearly unrelated to the user's documents, answer directly "
+    "without searching."
 )

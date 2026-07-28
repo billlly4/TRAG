@@ -51,6 +51,8 @@ export async function uploadDocument(file: File): Promise<DocumentMeta> {
 
 interface StreamHandlers {
   onDelta: (text: string) => void
+  onToolUse: (frame: Extract<ChatFrame, { type: 'tool_use' }>) => void
+  onToolResult: (frame: Extract<ChatFrame, { type: 'tool_result' }>) => void
   onDone: (frame: Extract<ChatFrame, { type: 'done' }>) => void
   onError: (detail: string) => void
 }
@@ -65,7 +67,6 @@ interface StreamHandlers {
 export async function streamChat(
   threadId: string,
   message: string,
-  documentIds: string[],
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -74,11 +75,7 @@ export async function streamChat(
     res = await fetch(`${BASE}/api/chat`, {
       method: 'POST',
       headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        thread_id: threadId,
-        message,
-        document_ids: documentIds,
-      }),
+      body: JSON.stringify({ thread_id: threadId, message }),
       signal,
     })
   } catch (err) {
@@ -119,6 +116,8 @@ export async function streamChat(
       }
 
       if (frame.type === 'delta') handlers.onDelta(frame.text)
+      else if (frame.type === 'tool_use') handlers.onToolUse(frame)
+      else if (frame.type === 'tool_result') handlers.onToolResult(frame)
       else if (frame.type === 'done') handlers.onDone(frame)
       else if (frame.type === 'error') handlers.onError(frame.detail)
     }

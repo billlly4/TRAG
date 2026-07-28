@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 
-const ACCEPTED = ['.pdf', '.txt', '.md', '.json', '.xml']
+const ACCEPTED = ['.pdf', '.docx', '.html', '.md', '.txt']
 
 function accepted(file: File): boolean {
   const name = file.name.toLowerCase()
@@ -30,7 +30,10 @@ export function DropZone({
 
   return (
     <div
-      className="relative flex flex-1 flex-col"
+      // min-h-0: flex items refuse to shrink below their content by default,
+      // which would let a long conversation grow this column past the viewport
+      // and turn the page into the scroll container.
+      className="relative flex min-h-0 flex-1 flex-col"
       onDragEnter={(e) => {
         e.preventDefault()
         if (!e.dataTransfer.types.includes('Files')) return
