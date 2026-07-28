@@ -11,4 +11,6 @@ agentic-rag-plan/
 # Node
 node_modules/
 dist/
-.claude\
+.claude
+
+.gitignore
