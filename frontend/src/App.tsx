@@ -1,0 +1,73 @@
+import { AuthForm } from './components/AuthForm'
+import { Composer } from './components/Composer'
+import { DropZone } from './components/DropZone'
+import { MessageList } from './components/MessageList'
+import { Sidebar } from './components/Sidebar'
+import { useAuth } from './hooks/useAuth'
+import { useChat } from './hooks/useChat'
+
+function Chat({ email, onSignOut }: { email?: string; onSignOut: () => void }) {
+  const chat = useChat()
+
+  return (
+    <div className="flex h-full">
+      <Sidebar
+        threads={chat.threads}
+        activeId={chat.activeId}
+        documents={chat.documents}
+        documentsInThread={chat.documentsInThread}
+        email={email}
+        onSelect={chat.setActiveId}
+        onNew={() => void chat.newThread()}
+        onDeleteThread={(id) => void chat.removeThread(id)}
+        onUpload={chat.upload}
+        onDeleteDocument={(id) => void chat.removeDocument(id)}
+        onSignOut={onSignOut}
+      />
+
+      <main className="flex flex-1 flex-col bg-zinc-100 dark:bg-zinc-950">
+        {/* Drop anywhere over the conversation, not just on a small target. */}
+        <DropZone onFiles={(files) => void chat.upload(files)}>
+          <MessageList
+            messages={chat.messages}
+            streamText={chat.streamText}
+            streaming={chat.streaming}
+            error={chat.error}
+            truncated={chat.truncated}
+          />
+          <Composer
+            documents={chat.documents}
+            documentsInThread={chat.documentsInThread}
+            streaming={chat.streaming}
+            onSend={(text, ids) => void chat.send(text, ids)}
+            onStop={chat.stop}
+          />
+        </DropZone>
+      </main>
+    </div>
+  )
+}
+
+export default function App() {
+  const { session, loading, signOut } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-zinc-400">
+        Loading…
+      </div>
+    )
+  }
+
+  if (!session) return <AuthForm />
+
+  // Keyed on user id so switching accounts remounts the chat with clean state
+  // rather than briefly showing the previous user's threads.
+  return (
+    <Chat
+      key={session.user.id}
+      email={session.user.email}
+      onSignOut={() => void signOut()}
+    />
+  )
+}

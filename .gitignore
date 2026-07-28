@@ -1,0 +1,14 @@
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+
+# (local only)
+agentic-rag-plan/
+
+# Node
+node_modules/
+dist/
+.claude\
