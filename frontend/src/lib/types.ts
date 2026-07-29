@@ -39,6 +39,9 @@ export interface Thread {
 export type DocumentStatus =
   | 'pending'
   | 'extracting'
+  /** LLM metadata extraction; runs before chunking because chunk embeddings
+   *  are prefixed with the extracted title. */
+  | 'analyzing'
   | 'chunking'
   | 'embedding'
   | 'ready'
@@ -53,12 +56,34 @@ export interface DocumentMeta {
   status: DocumentStatus
   error: string | null
   chunk_count: number | null
+
+  /**
+   * Chunks were built under a different processing config than the current
+   * one (or the row predates hashing). Computed by the backend, not stored --
+   * a Realtime row merge never carries it, which is why `ready` transitions
+   * refetch the list instead.
+   */
+  stale: boolean
+
+  /**
+   * Extracted by the LLM at ingest. All nullable: extraction can fail without
+   * failing the ingest, and documents from before Module 4 have none until
+   * they are re-processed.
+   */
+  title: string | null
+  doc_type: string | null
+  source_org: string | null
+  published_year: number | null
+  topics: string[] | null
+  summary: string | null
 }
 
 /** One retrieved passage, as attached to a tool_result block. */
 export interface Source {
   document_id: string
   filename: string
+  /** Markdown heading path the passage sits under, when the document had one. */
+  section: string | null
   ordinal: number
   similarity: number
 }

@@ -52,7 +52,7 @@ export function Banner({
   tone,
   children,
 }: {
-  tone: 'error' | 'warning'
+  tone: 'error' | 'warning' | 'info'
   children: ReactNode
 }) {
   const tones = {
@@ -60,6 +60,8 @@ export function Banner({
       'border-red-300 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200',
     warning:
       'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200',
+    info:
+      'border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200',
   }
   return (
     <div className={cx('rounded-lg border px-3 py-2 text-sm', tones[tone])}>

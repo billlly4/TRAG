@@ -22,9 +22,17 @@ export function useChat() {
   const [streamText, setStreamText] = useState('')
   const [liveTools, setLiveTools] = useState<LiveTool[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const showNotice = useCallback((text: string) => {
+    setNotice(text)
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    noticeTimer.current = setTimeout(() => setNotice(null), 6000)
+  }, [])
 
   const refreshThreads = useCallback(async () => {
     setThreads(await api.listThreads())
@@ -55,6 +63,13 @@ export function useChat() {
             return
           }
           const row = payload.new as DocumentMeta
+          // `stale` is computed by the API, not stored, so a raw table row
+          // can't carry it. Terminal states refetch the list to get it right;
+          // intermediate pipeline states just merge for zero-latency badges.
+          if (row.status === 'ready') {
+            refreshDocuments().catch(() => {})
+            return
+          }
           setDocuments((prev) =>
             prev.some((d) => d.id === row.id)
               ? prev.map((d) => (d.id === row.id ? { ...d, ...row } : d))
@@ -174,30 +189,70 @@ export function useChat() {
 
   const stop = useCallback(() => abortRef.current?.abort(), [])
 
-  const upload = useCallback(async (files: File | File[]) => {
-    setError(null)
-    const list = Array.isArray(files) ? files : [files]
-    const uploaded: DocumentMeta[] = []
+  const upload = useCallback(
+    async (files: File | File[]) => {
+      setError(null)
+      const list = Array.isArray(files) ? files : [files]
+      const uploaded: DocumentMeta[] = []
+      const unchanged: string[] = []
 
-    for (const file of list) {
-      try {
-        const doc = await api.uploadDocument(file)
-        uploaded.push(doc)
-      } catch (e) {
-        const detail = e instanceof Error ? e.message : String(e)
-        setError(`${file.name}: ${detail}`)
+      for (const file of list) {
+        try {
+          const { doc, existed } = await api.uploadDocument(file)
+          if (existed) {
+            // The record manager matched an existing document: either a no-op
+            // duplicate (still ready) or an in-place re-ingest (now pending).
+            if (doc.status === 'ready') unchanged.push(doc.filename)
+            setDocuments((prev) =>
+              prev.some((d) => d.id === doc.id)
+                ? prev.map((d) => (d.id === doc.id ? { ...d, ...doc } : d))
+                : [doc, ...prev],
+            )
+          } else {
+            uploaded.push(doc)
+          }
+        } catch (e) {
+          const detail = e instanceof Error ? e.message : String(e)
+          setError(`${file.name}: ${detail}`)
+        }
       }
-    }
 
-    // Realtime will also announce these inserts; the merge in the subscription
-    // handler de-duplicates by id, so adding them here is just lower latency.
-    if (uploaded.length > 0)
-      setDocuments((prev) => [
-        ...uploaded.filter((u) => !prev.some((d) => d.id === u.id)),
-        ...prev,
-      ])
-    return uploaded
+      if (unchanged.length > 0)
+        showNotice(`${unchanged.join(', ')} unchanged — already ingested`)
+
+      // Realtime will also announce these inserts; the merge in the
+      // subscription handler de-duplicates by id, so adding them here is just
+      // lower latency.
+      if (uploaded.length > 0)
+        setDocuments((prev) => [
+          ...uploaded.filter((u) => !prev.some((d) => d.id === u.id)),
+          ...prev,
+        ])
+      return uploaded
+    },
+    [showNotice],
+  )
+
+  const reprocess = useCallback(async (id: string) => {
+    setError(null)
+    try {
+      const doc = await api.reprocessDocument(id)
+      setDocuments((prev) => prev.map((d) => (d.id === doc.id ? { ...d, ...doc } : d)))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }, [])
+
+  const reprocessAll = useCallback(async () => {
+    setError(null)
+    try {
+      const { count } = await api.reprocessStale()
+      showNotice(`Re-processing ${count} document${count === 1 ? '' : 's'}…`)
+      await refreshDocuments()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [refreshDocuments, showNotice])
 
   const removeDocument = useCallback(async (id: string) => {
     await api.deleteDocument(id)
@@ -206,7 +261,8 @@ export function useChat() {
 
   return {
     threads, activeId, setActiveId, messages, documents,
-    streaming, streamText, liveTools, error, truncated,
+    streaming, streamText, liveTools, error, notice, truncated,
     newThread, removeThread, send, stop, upload, removeDocument,
+    reprocess, reprocessAll,
   }
 }

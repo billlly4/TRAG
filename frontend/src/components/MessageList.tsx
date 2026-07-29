@@ -68,6 +68,11 @@ function SourceList({ sources }: { sources: Source[] }) {
         {sources.map((s, i) => (
           <li key={i}>
             <span className="font-medium">{s.filename}</span>
+            {/* Section is null for documents with no Markdown headings, and
+                for anything ingested before Module 4. */}
+            {s.section && (
+              <span className="text-zinc-400"> › {s.section}</span>
+            )}
             {' · chunk '}
             {s.ordinal}
             {' · similarity '}

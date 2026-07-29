@@ -42,12 +42,29 @@ export const listDocuments = () => request<DocumentMeta[]>('/api/files')
 export const deleteDocument = (id: string) =>
   request<void>(`/api/files/${id}`, { method: 'DELETE' })
 
-export async function uploadDocument(file: File): Promise<DocumentMeta> {
+export async function uploadDocument(
+  file: File,
+): Promise<{ doc: DocumentMeta; existed: boolean }> {
   const form = new FormData()
   form.append('file', file)
+  // Raw fetch rather than request(): the status code is meaningful here.
+  // 201 = new document; 200 = the record manager matched an existing one
+  // (identical bytes skipped, or an in-place re-ingest was scheduled).
   // No Content-Type header: the browser must set the multipart boundary.
-  return request<DocumentMeta>('/api/files', { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/api/files`, {
+    method: 'POST',
+    headers: await authHeaders(),
+    body: form,
+  })
+  if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 300)}`)
+  return { doc: (await res.json()) as DocumentMeta, existed: res.status === 200 }
 }
+
+export const reprocessDocument = (id: string) =>
+  request<DocumentMeta>(`/api/files/${id}/reprocess`, { method: 'POST' })
+
+export const reprocessStale = () =>
+  request<{ count: number }>('/api/files/reprocess-stale', { method: 'POST' })
 
 interface StreamHandlers {
   onDelta: (text: string) => void

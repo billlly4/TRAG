@@ -17,12 +17,15 @@ function Chat({ email, onSignOut }: { email?: string; onSignOut: () => void }) {
         threads={chat.threads}
         activeId={chat.activeId}
         documents={chat.documents}
+        notice={chat.notice}
         email={email}
         onSelect={chat.setActiveId}
         onNew={() => void chat.newThread()}
         onDeleteThread={(id) => void chat.removeThread(id)}
         onUpload={chat.upload}
         onDeleteDocument={(id) => void chat.removeDocument(id)}
+        onReprocess={(id) => void chat.reprocess(id)}
+        onReprocessAll={() => void chat.reprocessAll()}
         onSignOut={onSignOut}
       />
 
