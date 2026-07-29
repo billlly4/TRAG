@@ -19,6 +19,10 @@ _SEPARATORS = ["\n\n", "\n", ". ", " "]
 
 _TABLE_LINE = re.compile(r"^\s*\|.*\|\s*$")
 _TABLE_DIVIDER = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
+_HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
+
+# Separates levels in a chunk's section path ("Chapter 3 > Inventory Models").
+_SECTION_SEP = " › "
 
 
 @dataclass
@@ -26,6 +30,12 @@ class Chunk:
     ordinal: int
     content: str
     token_count: int
+
+    # Markdown heading path this chunk starts under. Free provenance: docling
+    # already emits headings, so this costs no LLM call. It is what lets a
+    # citation say which section a passage came from, and it is prepended to
+    # the embedding input so a chunk is findable by its section's subject.
+    section: str | None = None
 
 
 def _estimate_tokens(text: str) -> int:
@@ -37,25 +47,46 @@ def _is_table(block: str) -> bool:
     return len(lines) >= 2 and all(_TABLE_LINE.match(l) for l in lines)
 
 
-def _split_blocks(text: str) -> list[str]:
-    """Split into paragraphs, keeping each Markdown table as a single block."""
-    blocks: list[str] = []
+def _split_blocks(text: str) -> list[tuple[str, str | None]]:
+    """Split into (block, section path) pairs.
+
+    Markdown tables stay whole. Headings do double duty: each one updates the
+    running section path AND remains in the text, because a heading is content
+    the reader (and the model) should still see in the chunk.
+    """
+    blocks: list[tuple[str, str | None]] = []
+    stack: list[tuple[int, str]] = []  # (heading level, title)
     table: list[str] = []
     para: list[str] = []
+
+    def section() -> str | None:
+        return _SECTION_SEP.join(title for _, title in stack) or None
 
     def flush_para() -> None:
         joined = "\n".join(para).strip()
         if joined:
-            blocks.append(joined)
+            blocks.append((joined, section()))
         para.clear()
 
     def flush_table() -> None:
         if table:
-            blocks.append("\n".join(table))
+            blocks.append(("\n".join(table), section()))
         table.clear()
 
     for line in text.splitlines():
-        if _TABLE_LINE.match(line):
+        heading = _HEADING.match(line)
+        if heading:
+            # Flush first: the preceding text belongs to the OLD section.
+            flush_table()
+            flush_para()
+            level = len(heading.group(1))
+            # Pop siblings and deeper levels; an h2 replaces the previous h2
+            # and everything nested under it, but keeps the h1 above it.
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, heading.group(2)))
+            blocks.append((line.strip(), section()))
+        elif _TABLE_LINE.match(line):
             flush_para()
             table.append(line)
         elif line.strip() == "":
@@ -128,53 +159,86 @@ def chunk_text(text: str) -> list[Chunk]:
     target_chars = settings.chunk_target_tokens * CHARS_PER_TOKEN
     overlap_chars = settings.chunk_overlap_tokens * CHARS_PER_TOKEN
 
-    # Pass 1: pieces that each fit the target. Tables are atomic when they
-    # fit and split header-repeated when they do not.
-    pieces: list[str] = []
-    for block in _split_blocks(text):
+    # Pass 1: pieces that each fit the target, every one keeping the section
+    # of the block it came from. Tables are atomic when they fit and split
+    # header-repeated when they do not.
+    pieces: list[tuple[str, str | None]] = []
+    for block, sect in _split_blocks(text):
         if len(block) <= target_chars:
-            pieces.append(block)
+            pieces.append((block, sect))
         elif _is_table(block):
-            pieces.extend(_split_table(block, target_chars))
+            pieces.extend((p, sect) for p in _split_table(block, target_chars))
         else:
-            pieces.extend(_split_recursive(block, target_chars))
+            pieces.extend((p, sect) for p in _split_recursive(block, target_chars))
 
     # Pass 2: pack pieces into chunks, carrying overlap between neighbours.
     # Overlap is whole trailing pieces (never a sliced table or mid-word cut),
     # capped by the overlap budget.
     chunks: list[Chunk] = []
-    current: list[str] = []
+    current: list[tuple[str, str | None]] = []
     current_len = 0
     has_new = False  # False while `current` holds only carried overlap
+    new_section: str | None = None  # section of the first non-carried piece
 
     def finalize() -> None:
-        nonlocal current, current_len, has_new
+        nonlocal current, current_len, has_new, new_section
         # Emit only when something new is pending -- a chunk that is nothing
         # but the previous chunk's overlap would be a pure duplicate.
         if has_new:
-            content = "\n\n".join(current).strip()
+            content = "\n\n".join(t for t, _ in current).strip()
             if content:
-                chunks.append(Chunk(len(chunks), content, _estimate_tokens(content)))
-        carry: list[str] = []
+                chunks.append(
+                    Chunk(len(chunks), content, _estimate_tokens(content), new_section)
+                )
+        carry: list[tuple[str, str | None]] = []
         carry_len = 0
         for piece in reversed(current):
-            if carry_len + len(piece) > overlap_chars:
+            if carry_len + len(piece[0]) > overlap_chars:
                 break
             carry.insert(0, piece)
-            carry_len += len(piece) + 2
+            carry_len += len(piece[0]) + 2
         current, current_len = carry, carry_len
         has_new = False
+        new_section = None
 
     for piece in pieces:
-        if current and current_len + len(piece) + 2 > target_chars:
+        if current and current_len + len(piece[0]) + 2 > target_chars:
             finalize()
             # A near-target piece can overflow even with just the carry ahead
             # of it; the piece wins and the overlap is dropped.
-            if current and current_len + len(piece) + 2 > target_chars:
+            if current and current_len + len(piece[0]) + 2 > target_chars:
                 current, current_len = [], 0
         current.append(piece)
-        current_len += len(piece) + 2
+        current_len += len(piece[0]) + 2
+        # The chunk is labelled by where its new content starts, not by the
+        # carried overlap -- otherwise every chunk inherits its predecessor's
+        # section and the path is always one step behind.
+        if not has_new:
+            new_section = piece[1]
         has_new = True
     finalize()
 
     return chunks
+
+
+# Bump when the layout below changes: it alters every stored vector, so
+# record.py folds it into config_hash and the corpus reads stale.
+EMBED_CONTEXT_VERSION = 1
+
+
+def embed_text(chunk: Chunk, title: str) -> str:
+    """The text actually sent to the embedding model for a chunk.
+
+    Deliberately different from chunk.content, which stays the raw body. A
+    chunk reading "margins fell 4% year over year" says nothing about whose
+    margins; the answer is in the title and the heading above it, which the
+    chunk itself never repeats. Prepending them makes the chunk retrievable by
+    its own subject.
+
+    Only the vector input is enriched. Feeding the same header back to Claude
+    inside every retrieved passage would spend tokens restating what the
+    source list already shows.
+    """
+    header = title if not chunk.section else f"{title}{_SECTION_SEP}{chunk.section}"
+    return f"{header}\n\n{chunk.content}" if header else chunk.content
+1

@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str
     anthropic_model: str = "claude-haiku-4-5"
 
+    # Deliberately separate from anthropic_model. Metadata feeds the embedding
+    # input (title + section are prepended to each chunk), so it is part of
+    # config_hash -- and tying it to the chat model would mean swapping the
+    # chat model marks the entire corpus stale and re-embeds it.
+    metadata_model: str = "claude-haiku-4-5"
+
     supabase_url: str
     supabase_publishable_key: str
 

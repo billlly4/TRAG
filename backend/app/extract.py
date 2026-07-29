@@ -8,6 +8,7 @@ so a revenue chart turns into text that chunks and embeds like any other.
 
 import logging
 import tempfile
+import threading
 from pathlib import Path
 
 from docling.datamodel.base_models import InputFormat
@@ -21,7 +22,31 @@ from .config import get_settings
 
 log = logging.getLogger(__name__)
 
+# Module-level so record.py can fingerprint it: changing this prompt changes
+# what captions (and therefore chunks) a document produces, so it is part of
+# the extraction config, not an implementation detail.
+VLM_PROMPT = (
+    "Describe this figure for a search index. State the chart type, "
+    "what is measured, and the key values or trend visible. "
+    "Be specific and concise."
+)
+
 _converter: DocumentConverter | None = None
+
+# Serialises PDF conversion across threads.
+#
+# _ingest runs as a FastAPI BackgroundTask, and sync background tasks execute
+# in a threadpool. Tasks scheduled by ONE request run sequentially, but tasks
+# from different requests do not -- an upload arriving during a re-process
+# batch, or two batches overlapping, puts two threads through the converter at
+# once. The converter wraps PyTorch/ONNX models (layout, TableFormer, OCR)
+# that are not thread-safe, and the failure mode is a SIGSEGV that kills the
+# whole server: no Python exception, no traceback, nothing written to
+# documents.error, and every in-flight document stranded mid-pipeline.
+#
+# The lock covers construction as well as conversion, so two threads cannot
+# race to build the singleton either.
+_converter_lock = threading.Lock()
 
 
 def _build_converter() -> DocumentConverter:
@@ -46,11 +71,7 @@ def _build_converter() -> DocumentConverter:
         pdf_options.picture_description_options = PictureDescriptionApiOptions(
             url=f"{settings.ollama_base_url.rstrip('/')}/v1/chat/completions",
             params={"model": settings.vlm_model},
-            prompt=(
-                "Describe this figure for a search index. State the chart type, "
-                "what is measured, and the key values or trend visible. "
-                "Be specific and concise."
-            ),
+            prompt=VLM_PROMPT,
             timeout=300,
         )
 
@@ -85,8 +106,13 @@ def extract_text(data: bytes, filename: str, mime: str | None = None) -> str:
     try:
         tmp.write(data)
         tmp.close()
-        result = _get_converter().convert(tmp.name)
-        markdown = result.document.export_to_markdown()
+        # One document through the models at a time -- see _converter_lock.
+        # Concurrent ingests queue here rather than crashing the process; the
+        # throughput cost is nil, because conversion was already the
+        # bottleneck and Ollama serialises the embedding step anyway.
+        with _converter_lock:
+            result = _get_converter().convert(tmp.name)
+            markdown = result.document.export_to_markdown()
     finally:
         Path(tmp.name).unlink(missing_ok=True)
 

@@ -77,3 +77,18 @@ class DocumentOut(BaseModel):
     status: str
     error: str | None = None
     chunk_count: int | None = None
+
+    # True when the stored chunks were built under a different extraction
+    # config than the current one (or under none at all -- legacy rows).
+    # Computed server-side against record.config_hash(); never stored.
+    stale: bool = False
+
+    # Extracted at ingest (backend/app/metadata.py). All optional: a document
+    # whose metadata extraction failed, or one ingested before Module 4, is
+    # still fully searchable -- it just cannot be filtered on.
+    title: str | None = None
+    doc_type: str | None = None
+    source_org: str | None = None
+    published_year: int | None = None
+    topics: list[str] | None = None
+    summary: str | None = None

@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
@@ -8,8 +9,11 @@ from fastapi.responses import StreamingResponse
 from ..deps import CurrentUserDep, DbDep, SettingsDep
 from ..embeddings import EmbeddingError
 from ..llm import SYSTEM_PROMPT, get_client, sanitize_for_api
-from ..retrieval import search
+from ..metadata import DOC_TYPES
+from ..retrieval import Filters, search
 from ..schemas import ChatRequest
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -18,18 +22,93 @@ SEARCH_TOOL = {
     "description": (
         "Search the user's uploaded documents for passages relevant to a question. "
         "Call this whenever answering might depend on their documents — do not answer "
-        "from memory when the user refers to their files."
+        "from memory when the user refers to their files. "
+        "The optional filters narrow the search before ranking; use them only when "
+        "the question is explicitly about a kind of document, a source, or a period, "
+        "and only with values listed in the corpus summary. Filtering on a value "
+        "that is not in the corpus returns nothing."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "A focused search query."},
             "top_k": {"type": "integer", "description": "Passages to return, 1-20. Default 5."},
+            "doc_type": {
+                "type": "array",
+                "items": {"type": "string", "enum": list(DOC_TYPES)},
+                "description": "Restrict to these document types.",
+            },
+            "source_org": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Restrict to these publishing organisations. Must match the "
+                    "corpus summary exactly."
+                ),
+            },
+            "topics": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Restrict to documents tagged with any of these topics.",
+            },
+            "year_min": {"type": "integer", "description": "Earliest publication year."},
+            "year_max": {"type": "integer", "description": "Latest publication year."},
         },
         "required": ["query"],
         "additionalProperties": False,
     },
 }
+
+# Caps on the corpus summary. A user with hundreds of documents should not
+# push the whole vocabulary into every request's system prompt.
+_SUMMARY_MAX_VALUES = 30
+
+
+def corpus_summary(db) -> str:
+    """A compact inventory of what is actually in the user's corpus.
+
+    Without this the model invents plausible filter values -- doc_type
+    "invoice", source_org "Acme Corp" -- that match nothing, and then reports
+    that the corpus has no answer. Injected into the system prompt rather than
+    exposed as a tool: a tool would cost an extra round trip on every question,
+    and Module 2 already measured that there is no prompt cache to protect
+    (cache_read_input_tokens is 0 at this prompt size).
+    """
+    try:
+        res = (
+            db.table("documents")
+            .select("doc_type,source_org,topics,published_year")
+            .eq("status", "ready")
+            .execute()
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("corpus summary unavailable", exc_info=True)
+        return ""
+
+    rows = res.data or []
+    if not rows:
+        return "\n\nThe user has no processed documents yet."
+
+    def distinct(key: str) -> list[str]:
+        seen = {r[key] for r in rows if r.get(key)}
+        return sorted(seen)[:_SUMMARY_MAX_VALUES]
+
+    topics = sorted({t for r in rows for t in (r.get("topics") or [])})
+    years = sorted({r["published_year"] for r in rows if r.get("published_year")})
+
+    lines = [f"\n\nThe user's corpus: {len(rows)} document(s)."]
+    if types := distinct("doc_type"):
+        lines.append(f"Types: {', '.join(types)}.")
+    if orgs := distinct("source_org"):
+        lines.append(f"Sources: {', '.join(orgs)}.")
+    if topics:
+        lines.append(f"Topics: {', '.join(topics[:_SUMMARY_MAX_VALUES])}.")
+    if years:
+        lines.append(f"Years: {years[0]}–{years[-1]}.")
+    lines.append(
+        "Only ever filter on values from these lists; otherwise search unfiltered."
+    )
+    return " ".join(lines)
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -47,12 +126,38 @@ def _run_search(db, tool_input: dict[str, Any]) -> tuple[str, list[dict], bool]:
         return "Error: 'query' is required.", [], True
     top_k = tool_input.get("top_k")
 
+    def as_list(key: str) -> list[str]:
+        value = tool_input.get(key)
+        if isinstance(value, str):  # tolerate a bare string where a list is asked for
+            return [value]
+        return [str(v) for v in value] if isinstance(value, list) else []
+
+    year_min, year_max = tool_input.get("year_min"), tool_input.get("year_max")
+    filters = Filters(
+        doc_types=as_list("doc_type"),
+        source_orgs=as_list("source_org"),
+        topics=as_list("topics"),
+        year_min=year_min if isinstance(year_min, int) else None,
+        year_max=year_max if isinstance(year_max, int) else None,
+    )
+
     try:
-        hits = search(db, query, top_k if isinstance(top_k, int) else None)
+        hits = search(db, query, top_k if isinstance(top_k, int) else None, filters)
     except EmbeddingError as exc:
         return f"Search unavailable: {exc}", [], True
 
     if not hits:
+        # Naming the filters matters: told only "nothing found", the model
+        # concludes the corpus cannot answer and stops. Told the filters
+        # matched nothing, it retries without them.
+        if filters.active():
+            return (
+                f"No passages matched the filters ({filters.describe()}). "
+                f"The filters may not match this corpus — retry without them "
+                f"before concluding the documents have no answer.",
+                [],
+                False,
+            )
         return (
             "No relevant passages found in the user's documents for this query.",
             [],
@@ -63,13 +168,14 @@ def _run_search(db, tool_input: dict[str, Any]) -> tuple[str, list[dict], bool]:
     sources = []
     for i, h in enumerate(hits, 1):
         parts.append(
-            f"[{i}] {h.filename} (chunk {h.ordinal}, similarity {h.similarity:.2f})\n"
+            f"[{i}] {h.label()} (chunk {h.ordinal}, similarity {h.similarity:.2f})\n"
             f"{h.content}"
         )
         sources.append(
             {
                 "document_id": h.document_id,
                 "filename": h.filename,
+                "section": h.section,
                 "ordinal": h.ordinal,
                 "similarity": round(h.similarity, 3),
             }
@@ -129,6 +235,10 @@ def chat(
     messages = history + [{"role": "user", "content": user_content}]
     client = get_client()
 
+    # Once per request, not per tool turn -- the corpus cannot change
+    # mid-answer, and re-querying it on every loop iteration would be waste.
+    system_prompt = SYSTEM_PROMPT + corpus_summary(db)
+
     def persist(role: str, content: list[dict], **extra: Any) -> dict:
         res = (
             db.table("messages")
@@ -153,7 +263,7 @@ def chat(
                 kwargs: dict[str, Any] = {
                     "model": settings.anthropic_model,
                     "max_tokens": settings.max_output_tokens,
-                    "system": SYSTEM_PROMPT,
+                    "system": system_prompt,
                     "tools": [SEARCH_TOOL],
                     "messages": messages,
                 }
