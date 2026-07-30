@@ -82,6 +82,13 @@ class Settings(BaseSettings):
 
     max_tool_turns: int = 5
 
+    # The account backend/evaluation signs in as. Read through Settings rather
+    # than os.environ because pydantic-settings loads .env into this object and
+    # does NOT export it to the process environment -- the same trap llm.py
+    # documents for the LangSmith SDK.
+    eval_user: str | None = None
+    eval_password: str | None = None
+
     @property
     def jwks_url(self) -> str:
         # Note the path: /auth/v1/jwks returns 404. The public keys are served

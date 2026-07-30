@@ -15,6 +15,9 @@ dependencies = [
     "supabase>=2.10",
     "python-multipart>=0.0.12",
     "docling>=2.115",   # PDF/DOCX/HTML/MD extraction; declares Python 3.13 support
+    # Golden set format. Already present as a docling transitive dependency,
+    # declared explicitly because backend/evaluation imports it directly.
+    "pyyaml>=6.0",
 ]
 
 [tool.uv]

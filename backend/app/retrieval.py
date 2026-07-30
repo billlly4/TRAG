@@ -93,7 +93,15 @@ def search(
     query: str,
     top_k: int | None = None,
     filters: Filters | None = None,
+    min_similarity: float | None = None,
 ) -> list[Hit]:
+    """Rank the user's chunks against a query.
+
+    `min_similarity` overrides the configured relevance threshold. The
+    evaluation harness passes 0.0 to get the unthresholded ranking: ranking
+    quality and threshold choice are separate questions, and measuring through
+    the threshold cannot tell you whether the threshold itself is right.
+    """
     settings = get_settings()
     k = max(1, min(top_k or settings.retrieval_top_k, 20))
     filters = filters or Filters()
@@ -115,7 +123,9 @@ def search(
     ).execute()
     hits = [Hit(**row) for row in res.data]
 
-    threshold = settings.retrieval_min_similarity
+    threshold = (
+        settings.retrieval_min_similarity if min_similarity is None else min_similarity
+    )
     for h in hits:
         log.info(
             "retrieval query=%r filters=[%s] %s#%d similarity=%.3f %s",

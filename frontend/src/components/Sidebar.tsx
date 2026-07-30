@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 
+import { ACCEPT_ATTRIBUTE } from '../lib/formats'
 import type { DocumentMeta, Thread } from '../lib/types'
 import { Banner, Button, cx } from './ui'
 
@@ -211,7 +212,7 @@ export function Sidebar({
           type="file"
           hidden
           multiple
-          accept=".pdf,.docx,.html,.md,.txt"
+          accept={ACCEPT_ATTRIBUTE}
           onChange={pick}
         />
         <Button

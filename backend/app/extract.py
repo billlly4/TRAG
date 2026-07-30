@@ -49,6 +49,36 @@ _converter: DocumentConverter | None = None
 _converter_lock = threading.Lock()
 
 
+# Extensions read straight off disk as text. Deliberately NOT "any text/* MIME
+# type": text/html and text/csv are both text/*, and passing them through
+# unconverted stores markup and raw rows instead of Markdown -- HTML tags then
+# get chunked and embedded as if they were prose.
+_PASSTHROUGH_SUFFIXES = {".txt", ".md", ".markdown"}
+_PASSTHROUGH_MIMES = {"text/plain", "text/markdown", "text/x-markdown"}
+
+# Formats docling can name but this app will not attempt. Audio and video need
+# ASR models we do not ship and would otherwise trigger a large model download
+# mid-ingest; better to reject in milliseconds with a readable reason.
+_REJECTED_SUFFIXES = {
+    ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm", ".vtt",
+}
+
+# What the UI offers and what the docs claim. Every one of these was verified
+# end to end through extract_text, not merely present in docling's format enum.
+SUPPORTED_SUFFIXES = sorted(
+    _PASSTHROUGH_SUFFIXES
+    | {
+        ".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".html", ".htm",
+        ".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp",
+    }
+)
+
+
+class UnsupportedFormat(ValueError):
+    pass
+
+
 def _build_converter() -> DocumentConverter:
     settings = get_settings()
 
@@ -76,7 +106,21 @@ def _build_converter() -> DocumentConverter:
         )
 
     return DocumentConverter(
-        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)}
+        # Belt and braces with the suffix check in extract_text: docling's
+        # default allows every format it knows, including audio and video, so a
+        # mislabelled or extensionless file could otherwise reach a pipeline
+        # that wants to download ASR models mid-ingest.
+        allowed_formats=[
+            InputFormat.PDF,
+            InputFormat.DOCX,
+            InputFormat.PPTX,
+            InputFormat.XLSX,
+            InputFormat.CSV,
+            InputFormat.HTML,
+            InputFormat.IMAGE,
+            InputFormat.MD,
+        ],
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)},
     )
 
 
@@ -93,11 +137,20 @@ def extract_text(data: bytes, filename: str, mime: str | None = None) -> str:
     """Extract a document's content as Markdown.
 
     Plain text passes through untouched -- docling would only add overhead and
-    it has no structure to recover.
+    it has no structure to recover. Everything else goes through conversion,
+    including HTML and CSV: they are text/* but they are not prose, and storing
+    them verbatim means embedding markup and raw rows.
     """
     suffix = Path(filename).suffix.lower()
 
-    if suffix in {".txt", ".md", ".markdown"} or (mime or "").startswith("text/"):
+    if suffix in _REJECTED_SUFFIXES:
+        raise UnsupportedFormat(
+            f"{suffix} files are not supported (audio and video need speech "
+            f"recognition models this app does not ship). Supported: "
+            f"{', '.join(SUPPORTED_SUFFIXES)}"
+        )
+
+    if suffix in _PASSTHROUGH_SUFFIXES or (mime or "").lower() in _PASSTHROUGH_MIMES:
         return data.decode("utf-8", errors="replace")
 
     # docling wants a path or URL, not bytes. delete=False because Windows

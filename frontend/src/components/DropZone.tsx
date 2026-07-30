@@ -1,10 +1,9 @@
 import { useRef, useState, type ReactNode } from 'react'
 
-const ACCEPTED = ['.pdf', '.docx', '.html', '.md', '.txt']
+import { ACCEPTED_EXTENSIONS, isAcceptedFile } from '../lib/formats'
 
 function accepted(file: File): boolean {
-  const name = file.name.toLowerCase()
-  return ACCEPTED.some((ext) => name.endsWith(ext))
+  return isAcceptedFile(file.name)
 }
 
 export function DropZone({
@@ -61,7 +60,7 @@ export function DropZone({
 
         if (bad.length > 0) {
           setRejected(
-            `Skipped ${bad.map((f) => f.name).join(', ')} — supported types: ${ACCEPTED.join(', ')}`,
+            `Skipped ${bad.map((f) => f.name).join(', ')} — supported types: ${ACCEPTED_EXTENSIONS.join(', ')}`,
           )
         }
         if (ok.length > 0) onFiles(ok)
@@ -76,7 +75,7 @@ export function DropZone({
               Drop to upload
             </p>
             <p className="mt-1 text-xs text-indigo-600/80 dark:text-indigo-300/80">
-              {ACCEPTED.join('  ·  ')}
+              {ACCEPTED_EXTENSIONS.join('  ·  ')}
             </p>
           </div>
         </div>

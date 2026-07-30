@@ -2,6 +2,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import (
     APIRouter,
@@ -17,7 +18,7 @@ from ..chunking import chunk_text, embed_text
 from ..config import Settings
 from ..deps import CurrentUserDep, DbDep, SettingsDep, create_user_client
 from ..embeddings import embed_documents
-from ..extract import extract_text
+from ..extract import SUPPORTED_SUFFIXES, extract_text
 from ..metadata import DocumentMetadata, extract_metadata
 from ..record import config_hash, content_hash, extraction_config
 from ..schemas import DocumentOut
@@ -231,6 +232,18 @@ async def upload_document(
     data = await file.read()
     if not data:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty file")
+
+    # Reject unsupported formats here rather than letting _ingest discover it:
+    # otherwise the bytes are uploaded to Storage and a document row is created
+    # just to end up `failed`, which reads like a processing bug rather than a
+    # file the app never accepted.
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in SUPPORTED_SUFFIXES:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            f"{suffix or 'This file type'} is not supported. Supported: "
+            f"{', '.join(SUPPORTED_SUFFIXES)}",
+        )
     if len(data) > settings.max_upload_bytes:
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
