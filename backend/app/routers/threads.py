@@ -1,13 +1,44 @@
 from fastapi import APIRouter, HTTPException, status
 
-from ..deps import CurrentUserDep, DbDep
-from ..schemas import MessageOut, ThreadCreate, ThreadOut
+from ..deps import CurrentUserDep, DbDep, SettingsDep
+from ..schemas import MessageOut, ThreadCreate, ThreadOut, UsageResponse
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 
+# Mounted separately from the /api/threads prefix -- usage spans threads and
+# documents, so it belongs to neither.
+usage_router = APIRouter(prefix="/api", tags=["usage"])
+
+
+@usage_router.get("/usage", response_model=UsageResponse)
+def get_usage(user: CurrentUserDep, db: DbDep, settings: SettingsDep) -> UsageResponse:
+    """Current consumption against the quotas. RLS scopes both counts."""
+    threads = db.table("threads").select("id", count="exact").execute()
+    docs = db.table("documents").select("byte_size").execute().data or []
+    return UsageResponse(
+        threads_used=threads.count or 0,
+        threads_limit=settings.max_threads_per_user,
+        storage_used_bytes=sum(d["byte_size"] or 0 for d in docs),
+        storage_limit_bytes=settings.max_storage_bytes,
+        messages_per_thread_limit=settings.max_messages_per_thread,
+    )
+
 
 @router.post("", response_model=ThreadOut, status_code=status.HTTP_201_CREATED)
-def create_thread(body: ThreadCreate, user: CurrentUserDep, db: DbDep) -> ThreadOut:
+def create_thread(
+    body: ThreadCreate, user: CurrentUserDep, db: DbDep, settings: SettingsDep
+) -> ThreadOut:
+    # The real enforcement is a BEFORE INSERT trigger (0006_quotas.sql) -- this
+    # check exists so the user reads "you have 5 of 5 chats" instead of a raw
+    # Postgres check_violation. RLS scopes the count to the caller.
+    existing = db.table("threads").select("id", count="exact").execute()
+    if (existing.count or 0) >= settings.max_threads_per_user:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"You have {existing.count} of {settings.max_threads_per_user} chats. "
+            f"Delete one before starting another.",
+        )
+
     res = (
         db.table("threads")
         .insert({"user_id": user.id, "title": body.title})

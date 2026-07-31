@@ -28,6 +28,21 @@ export interface Message {
   created_at: string
 }
 
+/**
+ * Quota consumption. Limits come from the server rather than being hardcoded
+ * here: the real values live in the `quotas` table and can change without a
+ * frontend deploy.
+ */
+export interface Usage {
+  threads_used: number
+  threads_limit: number
+  /** Supabase Storage bucket only -- the original files. Chats and chunks are
+   *  in Postgres and bounded by messages_per_thread_limit instead. */
+  storage_used_bytes: number
+  storage_limit_bytes: number
+  messages_per_thread_limit: number
+}
+
 export interface Thread {
   id: string
   title: string | null
@@ -78,21 +93,30 @@ export interface DocumentMeta {
   summary: string | null
 }
 
-/** One retrieved passage, as attached to a tool_result block. */
+/**
+ * One retrieved passage, as attached to a tool_result block.
+ *
+ * These are REPLAYED FROM THE DATABASE, so this interface describes the shape
+ * written *today* — messages stored by earlier versions are missing whatever
+ * did not exist yet. Every field added after Module 2 is therefore optional,
+ * and must be checked with `typeof`, not against `null`: `undefined !== null`
+ * is true, and one `.toFixed()` on a missing field throws during render and
+ * blanks the entire thread.
+ */
 export interface Source {
   document_id: string
   filename: string
-  /** Markdown heading path the passage sits under, when the document had one. */
-  section: string | null
+  /** Heading path. Absent on messages stored before Module 4. */
+  section?: string | null
   ordinal: number
   /** Vector cosine. 0 for a hit found only by the keyword channel. */
   similarity: number
   /**
-   * Cross-encoder score, null when reranking is off. When present this is what
-   * the list is ORDERED by, so it has to be shown — cosine alone next to a
-   * reranked ranking displays numbers that contradict the order.
+   * Cross-encoder score — what the list is ORDERED by when present, which is
+   * why it has to be displayed. Absent on messages stored before Module 6 and
+   * whenever reranking is off.
    */
-  rerank_score: number | null
+  rerank_score?: number | null
 }
 
 /** Frames emitted by POST /api/chat over SSE. */

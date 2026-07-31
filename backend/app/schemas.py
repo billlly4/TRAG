@@ -20,6 +20,25 @@ class HealthResponse(BaseModel):
     model: str
 
 
+class UsageResponse(BaseModel):
+    """What the caller has used, and what they are allowed.
+
+    Limits are reported alongside usage so the UI never hardcodes them -- the
+    real values live in the `quotas` table and can be changed without a deploy.
+    """
+
+    threads_used: int
+    threads_limit: int
+
+    # Storage is the Supabase bucket only: the original uploaded files. Chunks,
+    # embeddings and chat messages live in Postgres and are a separate resource,
+    # bounded by the per-chat message limit rather than by this number.
+    storage_used_bytes: int
+    storage_limit_bytes: int
+
+    messages_per_thread_limit: int
+
+
 class MeResponse(BaseModel):
     id: str
     email: str | None = None

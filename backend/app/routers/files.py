@@ -255,6 +255,25 @@ async def upload_document(
     chash = content_hash(data)
     current = config_hash()
 
+    # Storage quota. Enforced for real by a trigger (0006_quotas.sql); checked
+    # here so the message names the numbers. Counted AFTER the duplicate and
+    # same-filename lookups below would have run, though -- so it is computed
+    # excluding any document this upload will replace, since replacing a file
+    # is not the same as adding one.
+    def _quota_check(replacing_id: str | None) -> None:
+        rows = db.table("documents").select("id,byte_size").execute().data or []
+        used = sum(
+            r["byte_size"] or 0 for r in rows if r["id"] != replacing_id
+        )
+        if used + len(data) > settings.max_storage_bytes:
+            mb = 1024 * 1024
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"Storage full: {used / mb:.1f} MB used of "
+                f"{settings.max_storage_bytes / mb:.0f} MB, and this file is "
+                f"{len(data) / mb:.1f} MB. Delete a document to free space.",
+            )
+
     # RLS scopes both lookups to the caller -- no explicit user filter needed,
     # and no way for one user's upload to match another's document.
     dup = (
@@ -272,6 +291,7 @@ async def upload_document(
             return _to_out(row, current)
         # Same bytes but the previous run failed or used an old config: retry
         # in place. Bytes are already in Storage from the first attempt.
+        _quota_check(row["id"])
         _restart_row(db, row, chash, file.content_type, len(data))
         background.add_task(
             _ingest, row["id"], data, None, row["filename"], file.content_type,
@@ -291,6 +311,9 @@ async def upload_document(
         # Modified file: same name, new content. Update in place -- the
         # document id (and old chats' source references) stays stable.
         row = same_name.data[0]
+        # Replacing, not adding: the row's current size does not count against
+        # the quota, only the new bytes do.
+        _quota_check(row["id"])
         storage_path = row["storage_path"]
         if not storage_path:
             # Module 1 relic that never had bytes in Storage: adopt it.
@@ -315,6 +338,7 @@ async def upload_document(
         return _to_out(row, current)
 
     # Genuinely new document.
+    _quota_check(None)
     document_id = str(uuid.uuid4())
     storage_path = f"{user.id}/{document_id}/{_safe_storage_name(filename)}"
 

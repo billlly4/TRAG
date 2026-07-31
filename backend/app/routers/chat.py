@@ -217,11 +217,23 @@ def chat(
 
     history_res = (
         db.table("messages")
-        .select("role,content")
+        .select("role,content", count="exact")
         .eq("thread_id", body.thread_id)
         .order("created_at")
         .execute()
     )
+
+    # Checked before anything is written. A turn inserts several rows (the
+    # question, the tool call, the tool results, the answer), so refusing the
+    # whole turn up front is the only way to avoid ending it half-persisted when
+    # the trigger fires partway through. The trigger is still the real limit --
+    # this is what turns it into a sentence the user can act on.
+    if (history_res.count or 0) >= settings.max_messages_per_thread:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This chat has reached its {settings.max_messages_per_thread}-message "
+            f"limit. Start a new chat to continue.",
+        )
 
     # Module 1 turns carry `document` blocks referencing Anthropic's Files API,
     # which this app no longer uses (no beta header, files may be deleted).

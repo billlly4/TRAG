@@ -58,6 +58,20 @@ class Settings(BaseSettings):
     # context ceiling it guarded against.
     max_upload_bytes: int = 26_214_400  # 25 MB
 
+    # Per-user quotas. These mirror the values in the `quotas` table, which is
+    # where they are actually ENFORCED (0006_quotas.sql) -- the frontend holds a
+    # real user JWT and can reach PostgREST directly, so a check that lives only
+    # here is advice. Their job in the API is to produce a readable message
+    # before the database raises a bare exception.
+    max_threads_per_user: int = 5
+    max_storage_bytes: int = 104_857_600  # 100 MB
+
+    # Message ROWS, not conversational turns: one search-using exchange writes
+    # four rows (question, tool call, tool results, answer), so 200 is roughly
+    # 50 exchanges. Chats live in Postgres, so this bounds the database, which
+    # max_storage_bytes -- counting only the Storage bucket -- does not.
+    max_messages_per_thread: int = 200
+
     # Anthropic has no embeddings endpoint, so embeddings come from Ollama.
     # EMBEDDING_DIM must match the vector(768) column in 0002_retrieval.sql --
     # changing the model means a new migration and re-embedding the corpus.

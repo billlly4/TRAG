@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 
 import { ACCEPT_ATTRIBUTE } from '../lib/formats'
-import type { DocumentMeta, Thread } from '../lib/types'
+import type { DocumentMeta, Thread, Usage } from '../lib/types'
 import { Banner, Button, cx } from './ui'
 
 /**
@@ -44,11 +44,67 @@ function StatusBadge({ doc }: { doc: DocumentMeta }) {
   )
 }
 
+function formatBytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024)
+  if (mb >= 10) return `${Math.round(mb)} MB`
+  if (mb >= 1) return `${mb.toFixed(1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+/**
+ * Quota meters. Shown so the limits are discoverable BEFORE they are hit --
+ * a refusal is far less annoying when you could already see it coming and know
+ * what to delete.
+ *
+ * Storage is the Supabase Storage bucket only: the original uploaded files.
+ * Chats and chunks live in Postgres, which is a separate resource, bounded by
+ * the per-chat message limit rather than by this number.
+ */
+function UsageMeters({ usage }: { usage: Usage }) {
+  const rows = [
+    {
+      label: 'Chats',
+      text: `${usage.threads_used} / ${usage.threads_limit}`,
+      ratio: usage.threads_used / Math.max(1, usage.threads_limit),
+    },
+    {
+      label: 'Files',
+      text: `${formatBytes(usage.storage_used_bytes)} / ${formatBytes(usage.storage_limit_bytes)}`,
+      ratio: usage.storage_used_bytes / Math.max(1, usage.storage_limit_bytes),
+    },
+  ]
+
+  return (
+    <div className="mb-3 space-y-1.5">
+      {rows.map((r) => (
+        <div key={r.label}>
+          <div className="flex justify-between text-[11px] text-zinc-500">
+            <span>{r.label}</span>
+            <span className={r.ratio >= 1 ? 'text-amber-600 dark:text-amber-400' : ''}>
+              {r.text}
+            </span>
+          </div>
+          <div className="mt-0.5 h-1 overflow-hidden rounded bg-zinc-200 dark:bg-zinc-800">
+            <div
+              className={cx(
+                'h-full rounded transition-all',
+                r.ratio >= 1 ? 'bg-amber-500' : 'bg-indigo-500',
+              )}
+              style={{ width: `${Math.min(100, r.ratio * 100)}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function Sidebar({
   threads,
   activeId,
   documents,
   notice,
+  usage,
   email,
   onSelect,
   onNew,
@@ -63,6 +119,8 @@ export function Sidebar({
   activeId: string | null
   documents: DocumentMeta[]
   notice: string | null
+  /** null until the first /api/usage response lands. */
+  usage: Usage | null
   email?: string
   onSelect: (id: string) => void
   onNew: () => void
@@ -226,6 +284,7 @@ export function Sidebar({
       </div>
 
       <div className="border-t border-zinc-200 p-3 dark:border-zinc-800">
+        {usage && <UsageMeters usage={usage} />}
         <p className="mb-2 truncate text-xs text-zinc-500">{email}</p>
         <Button variant="ghost" className="w-full" onClick={onSignOut}>
           Sign out

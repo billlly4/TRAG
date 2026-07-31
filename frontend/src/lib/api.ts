@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { ChatFrame, DocumentMeta, Message, Thread } from './types'
+import type { ChatFrame, DocumentMeta, Message, Thread, Usage } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -23,6 +23,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const listThreads = () => request<Thread[]>('/api/threads')
+
+export const getUsage = () => request<Usage>('/api/usage')
 
 export const createThread = () =>
   request<Thread>('/api/threads', {

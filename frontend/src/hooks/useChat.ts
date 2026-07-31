@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import * as api from '../lib/api'
 import { supabase } from '../lib/supabase'
-import type { DocumentMeta, Message, Source, Thread } from '../lib/types'
+import type { DocumentMeta, Message, Source, Thread, Usage } from '../lib/types'
 
 /** A search the assistant is running (or has run) during the live turn. */
 export interface LiveTool {
@@ -17,6 +17,7 @@ export function useChat() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [documents, setDocuments] = useState<DocumentMeta[]>([])
+  const [usage, setUsage] = useState<Usage | null>(null)
 
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
@@ -42,10 +43,18 @@ export function useChat() {
     setDocuments(await api.listDocuments())
   }, [])
 
+  // Refetched rather than derived locally: storage counts bytes the client
+  // never sees for documents it did not upload this session, and the limits
+  // themselves live in the database.
+  const refreshUsage = useCallback(async () => {
+    setUsage(await api.getUsage())
+  }, [])
+
   useEffect(() => {
     refreshThreads().catch((e) => setError(String(e)))
     refreshDocuments().catch((e) => setError(String(e)))
-  }, [refreshThreads, refreshDocuments])
+    refreshUsage().catch(() => {})
+  }, [refreshThreads, refreshDocuments, refreshUsage])
 
   // Ingestion status arrives by Realtime push, not polling: the backend writes
   // documents.status at each pipeline transition and Postgres publishes the
@@ -95,25 +104,42 @@ export function useChat() {
   }, [activeId])
 
   const newThread = useCallback(async () => {
-    const thread = await api.createThread()
-    setThreads((prev) => [thread, ...prev])
-    setActiveId(thread.id)
-    return thread
-  }, [])
+    // Errors are surfaced, not thrown past the caller: hitting the chat quota
+    // is an ordinary outcome, and an unhandled rejection here would leave the
+    // button looking like it silently did nothing.
+    try {
+      const thread = await api.createThread()
+      setThreads((prev) => [thread, ...prev])
+      setActiveId(thread.id)
+      setError(null)
+      void refreshUsage()
+      return thread
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      return null
+    }
+  }, [refreshUsage])
 
   const removeThread = useCallback(
     async (id: string) => {
       await api.deleteThread(id)
       setThreads((prev) => prev.filter((t) => t.id !== id))
       setActiveId((cur) => (cur === id ? null : cur))
+      void refreshUsage()
     },
-    [],
+    [refreshUsage],
   )
 
   const send = useCallback(
     async (text: string) => {
       let threadId = activeId
-      if (!threadId) threadId = (await newThread()).id
+      if (!threadId) {
+        // newThread returns null when the chat quota is reached; the error is
+        // already on screen, so stop rather than sending into a null thread.
+        const created = await newThread()
+        if (!created) return
+        threadId = created.id
+      }
 
       setError(null)
       setTruncated(false)
@@ -217,6 +243,8 @@ export function useChat() {
         }
       }
 
+      void refreshUsage()
+
       if (unchanged.length > 0)
         showNotice(`${unchanged.join(', ')} unchanged — already ingested`)
 
@@ -230,7 +258,7 @@ export function useChat() {
         ])
       return uploaded
     },
-    [showNotice],
+    [showNotice, refreshUsage],
   )
 
   const reprocess = useCallback(async (id: string) => {
@@ -257,10 +285,17 @@ export function useChat() {
   const removeDocument = useCallback(async (id: string) => {
     await api.deleteDocument(id)
     setDocuments((prev) => prev.filter((d) => d.id !== id))
-  }, [])
+    void refreshUsage()
+  }, [refreshUsage])
+
+  // The chat is full when its stored message rows reach the server's limit.
+  // Counted from what is loaded rather than fetched: this thread's messages are
+  // already in memory, so an extra round trip would tell us nothing new.
+  const chatFull =
+    usage !== null && messages.length >= usage.messages_per_thread_limit
 
   return {
-    threads, activeId, setActiveId, messages, documents,
+    threads, activeId, setActiveId, messages, documents, usage, chatFull,
     streaming, streamText, liveTools, error, notice, truncated,
     newThread, removeThread, send, stop, upload, removeDocument,
     reprocess, reprocessAll,

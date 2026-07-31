@@ -75,13 +75,17 @@ function SourceList({ sources }: { sources: Source[] }) {
             )}
             {' · chunk '}
             {s.ordinal}
-            {/* Cosine is omitted for keyword-only hits, where it is 0 by
-                construction and would read as "irrelevant" for a passage that
-                was matched exactly. */}
-            {s.similarity > 0 && ` · cos ${s.similarity.toFixed(3)}`}
+            {/* Every field below is checked with `typeof`, not against null.
+                These objects are REPLAYED FROM THE DATABASE, so a message
+                stored before a field existed simply has no such key --
+                `undefined !== null` is true, and the render then throws on
+                `.toFixed()`, unmounting the whole thread into a blank screen.
+                The TypeScript types describe today's shape, not history's. */}
+            {typeof s.similarity === 'number' && s.similarity > 0 &&
+              ` · cos ${s.similarity.toFixed(3)}`}
             {/* Shown whenever reranking ran, because it is what the list is
                 sorted by — without it the numbers appear out of order. */}
-            {s.rerank_score !== null && (
+            {typeof s.rerank_score === 'number' && (
               <span className="text-zinc-400">
                 {` · rerank ${s.rerank_score > 0 ? '+' : ''}${s.rerank_score.toFixed(2)}`}
               </span>

@@ -42,5 +42,6 @@ def me(user: CurrentUserDep) -> MeResponse:
 
 
 app.include_router(threads.router)
+app.include_router(threads.usage_router)
 app.include_router(files.router)
 app.include_router(chat.router)

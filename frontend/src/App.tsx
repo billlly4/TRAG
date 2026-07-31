@@ -18,6 +18,7 @@ function Chat({ email, onSignOut }: { email?: string; onSignOut: () => void }) {
         activeId={chat.activeId}
         documents={chat.documents}
         notice={chat.notice}
+        usage={chat.usage}
         email={email}
         onSelect={chat.setActiveId}
         onNew={() => void chat.newThread()}
@@ -42,6 +43,7 @@ function Chat({ email, onSignOut }: { email?: string; onSignOut: () => void }) {
           />
           <Composer
             streaming={chat.streaming}
+            full={chat.chatFull}
             onSend={(text) => void chat.send(text)}
             onStop={chat.stop}
           />
