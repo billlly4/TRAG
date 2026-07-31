@@ -88,6 +88,29 @@ class Settings(BaseSettings):
     # native model runtimes that can segfault, and one did -- taking the API
     # down with it. Out of process, that costs an extraction instead of the
     # server. Must stay on loopback: the service is unauthenticated by design.
+    # --- ingestion worker ----------------------------------------------------
+    # Ingestion runs in a THIRD process draining a queue, so a restart or crash
+    # no longer abandons documents mid-pipeline. The worker holds no
+    # service_role key and no user credentials: it signs in as its own account
+    # and reaches the database only through four SECURITY DEFINER functions
+    # that take a job id (0008_ingest_queue.sql).
+    ingest_worker_email: str | None = None
+    ingest_worker_password: str | None = None
+    ingest_worker_label: str = "local-worker"
+
+    # How often to ask for work when the queue is empty.
+    ingest_poll_seconds: float = 3.0
+
+    # How long a claimed job may go silent before another worker may take it.
+    # MUST exceed the longest legitimate job: a figure-heavy PDF measured 421s
+    # on CPU. Too low and two workers process the same document; too high and a
+    # crashed worker's job waits that long to be retried.
+    ingest_stale_after_seconds: int = 3600
+
+    # Lifetime of the per-job signed URL. Generous because a bulk re-process can
+    # queue for hours, and a URL that expires mid-backlog fails the job.
+    ingest_url_ttl_seconds: int = 604_800  # 7 days
+
     extractor_url: str = "http://127.0.0.1:8001"
     # Generous on purpose. A large PDF with VLM captioning legitimately runs for
     # minutes; Module 2 measured 56s for one page with a single figure.

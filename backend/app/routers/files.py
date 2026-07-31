@@ -1,12 +1,11 @@
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     File,
     HTTPException,
     Response,
@@ -14,12 +13,9 @@ from fastapi import (
     status,
 )
 
-from ..chunking import chunk_text, embed_text
 from ..config import Settings
-from ..deps import CurrentUserDep, DbDep, SettingsDep, create_user_client
-from ..embeddings import embed_documents
-from ..extract import SUPPORTED_SUFFIXES, extract_text
-from ..metadata import DocumentMetadata, extract_metadata
+from ..deps import CurrentUserDep, DbDep, SettingsDep
+from ..extract import SUPPORTED_SUFFIXES
 from ..record import config_hash, content_hash, extraction_config
 from ..schemas import DocumentOut
 
@@ -49,39 +45,6 @@ def _safe_storage_name(filename: str) -> str:
     return re.sub(r"[^\w.\-]+", "_", filename) or "upload"
 
 
-def _metadata_columns(meta: DocumentMetadata | None, error: str | None) -> dict:
-    """Flatten extracted metadata into the documents columns.
-
-    Written even when extraction failed, so a retry cannot leave last run's
-    metadata attached to this run's chunks. The failure reason goes into the
-    jsonb column rather than documents.error -- `error` means "this document
-    is not searchable", and a document with no metadata still is.
-    """
-    if meta is None:
-        return {
-            "title": None, "doc_type": None, "source_org": None, "authors": None,
-            "published_on": None, "published_year": None, "language": None,
-            "topics": None, "summary": None,
-            "metadata": {"metadata_error": error} if error else None,
-        }
-
-    # mode="json" turns the `date` into a string; PostgREST is fed JSON and
-    # a bare datetime.date is not serialisable.
-    dump = meta.model_dump(mode="json")
-    return {
-        "title": meta.title,
-        "doc_type": meta.doc_type,
-        "source_org": meta.source_org,
-        "authors": meta.authors,
-        "published_on": dump["published_on"],
-        "published_year": meta.published_year,
-        "language": meta.language,
-        "topics": meta.topics,
-        "summary": meta.summary,
-        "metadata": dump,
-    }
-
-
 def _to_out(row: dict, current_hash: str) -> DocumentOut:
     return DocumentOut(
         **{k: row[k] for k in _DOCUMENT_COLUMNS.split(",")},
@@ -89,107 +52,41 @@ def _to_out(row: dict, current_hash: str) -> DocumentOut:
     )
 
 
-def _ingest(
-    document_id: str,
-    data: bytes | None,
-    storage_path: str | None,
-    filename: str,
-    mime: str | None,
-    user_id: str,
-    token: str,
-    settings: Settings,
-) -> None:
-    """Walk a document through extracting -> chunking -> embedding -> ready.
+def _enqueue(db, settings: Settings, document_id: str, user_id: str,
+             filename: str, mime: str | None, storage_path: str) -> None:
+    """Queue a document for the ingestion worker.
 
-    Each status write is what Supabase Realtime pushes to the UI, so the
-    transitions are the progress bar. Runs with the caller's JWT: writes go
-    through RLS as the user, same as the request that scheduled it. A
-    service_role key would also work, which is exactly why it is not used.
+    Replaces the BackgroundTask this used to be. The difference that matters is
+    durability: a background task lives inside this process, so a restart or a
+    crash abandoned it silently and left the document at 'pending' with nothing
+    working on it. A row in ingest_jobs outlives the API entirely.
 
-    `data` is passed by the upload path (it already holds the bytes); the
-    reprocess path passes `storage_path` instead and the bytes are read back
-    here, inside the try, so a Storage failure lands in documents.error.
+    The signed URL is minted HERE, while we still hold the caller's JWT. That is
+    what lets the worker read one specific object with no Storage credentials of
+    its own: it is handed a capability for a single file, not a key.
     """
-    db = create_user_client(settings, token)
-
-    # Captured before work starts: these describe the run that actually
-    # happened, even if settings change while it is in flight.
-    cfg = extraction_config()
-    cfg_hash = config_hash()
-
-    def update(**fields) -> None:
-        db.table("documents").update(fields).eq("id", document_id).execute()
-
-    try:
-        if data is None:
-            data = db.storage.from_(BUCKET).download(storage_path)
-
-        update(status="extracting")
-        text = extract_text(data, filename, mime)
-
-        # Before chunking, not after: the extracted title is prepended to every
-        # chunk's embedding input, so it has to exist before anything is
-        # embedded. extract_metadata never raises -- a document with no
-        # metadata is still perfectly searchable, so a failure here must not
-        # cost the whole ingest.
-        update(status="analyzing")
-        meta, meta_error = extract_metadata(text, filename)
-
-        update(status="chunking")
-        chunks = chunk_text(text)
-        if not chunks:
-            raise ValueError("No text could be extracted from the document")
-
-        update(status="embedding")
-        # What gets embedded is enriched with title and section; what gets
-        # stored in chunks.content stays the raw body. See chunking.embed_text.
-        title = (meta.title if meta and meta.title else None) or filename
-        vectors = embed_documents([embed_text(c, title) for c in chunks])
-
-        rows = [
-            {
-                "document_id": document_id,
-                "user_id": user_id,
-                "ordinal": chunk.ordinal,
-                "content": chunk.content,
-                "section": chunk.section,
-                "token_count": chunk.token_count,
-                "embedding": vector,
-            }
-            for chunk, vector in zip(chunks, vectors)
-        ]
-
-        # Replace, not append: on re-ingest the old regime's chunks go here,
-        # after the new embeddings exist, so the "document has no chunks"
-        # window is milliseconds rather than the whole pipeline run.
-        db.table("chunks").delete().eq("document_id", document_id).execute()
-        for i in range(0, len(rows), _INSERT_BATCH):
-            db.table("chunks").insert(rows[i : i + _INSERT_BATCH]).execute()
-
-        update(
-            status="ready",
-            chunk_count=len(chunks),
-            error=None,
-            config_hash=cfg_hash,
-            extraction_config=cfg,
-            processed_at=datetime.now(timezone.utc).isoformat(),
-            # Always written, even on a failed extraction: otherwise a retry
-            # leaves the previous run's metadata attached to this run's chunks.
-            **_metadata_columns(meta, meta_error),
-        )
-        log.info(
-            "ingested %s: %d chunks, metadata=%s",
-            filename, len(chunks), "ok" if meta else f"failed ({meta_error})",
+    signed = db.storage.from_(BUCKET).create_signed_url(
+        storage_path, settings.ingest_url_ttl_seconds
+    )
+    url = signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")
+    if not url:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Could not create a signed URL for the uploaded file",
         )
 
-    except Exception as exc:  # noqa: BLE001
-        log.exception("ingest failed for document %s (%s)", document_id, filename)
-        # A row stuck at 'extracting' with no error is indistinguishable from a
-        # job still running; 'failed' plus a readable reason is the contract.
-        try:
-            update(status="failed", error=str(exc)[:500])
-        except Exception:
-            log.exception("could not record ingest failure for %s", document_id)
+    expires = datetime.now(timezone.utc) + timedelta(
+        seconds=settings.ingest_url_ttl_seconds
+    )
+    db.table("ingest_jobs").insert({
+        "document_id": document_id,
+        "user_id": user_id,
+        "filename": filename,
+        "mime_type": mime,
+        "source_url": url,
+        "source_expires_at": expires.isoformat(),
+    }).execute()
+    log.info("queued %s for ingestion (document %s)", filename, document_id)
 
 
 def _restart_row(
@@ -214,7 +111,6 @@ def _restart_row(
 
 @router.post("", response_model=DocumentOut, status_code=status.HTTP_201_CREATED)
 async def upload_document(
-    background: BackgroundTasks,
     response: Response,
     user: CurrentUserDep,
     db: DbDep,
@@ -233,7 +129,7 @@ async def upload_document(
     if not data:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty file")
 
-    # Reject unsupported formats here rather than letting _ingest discover it:
+    # Reject unsupported formats here rather than letting the worker discover it:
     # otherwise the bytes are uploaded to Storage and a document row is created
     # just to end up `failed`, which reads like a processing bug rather than a
     # file the app never accepted.
@@ -293,10 +189,8 @@ async def upload_document(
         # in place. Bytes are already in Storage from the first attempt.
         _quota_check(row["id"])
         _restart_row(db, row, chash, file.content_type, len(data))
-        background.add_task(
-            _ingest, row["id"], data, None, row["filename"], file.content_type,
-            user.id, user.token, settings,
-        )
+        _enqueue(db, settings, row["id"], user.id, row["filename"],
+                 file.content_type, row["storage_path"])
         response.status_code = status.HTTP_200_OK
         return _to_out(row, current)
 
@@ -330,10 +224,8 @@ async def upload_document(
             },
         )
         _restart_row(db, row, chash, file.content_type, len(data))
-        background.add_task(
-            _ingest, row["id"], data, None, filename, file.content_type,
-            user.id, user.token, settings,
-        )
+        _enqueue(db, settings, row["id"], user.id, filename,
+                 file.content_type, storage_path)
         response.status_code = status.HTTP_200_OK
         return _to_out(row, current)
 
@@ -365,10 +257,8 @@ async def upload_document(
         .execute()
     )
 
-    background.add_task(
-        _ingest, document_id, data, None, filename, file.content_type,
-        user.id, user.token, settings,
-    )
+    _enqueue(db, settings, document_id, user.id, filename,
+             file.content_type, storage_path)
     return _to_out(res.data[0], current)
 
 
@@ -386,7 +276,6 @@ def list_documents(user: CurrentUserDep, db: DbDep) -> list[DocumentOut]:
 
 @router.post("/reprocess-stale", status_code=status.HTTP_202_ACCEPTED)
 def reprocess_stale(
-    background: BackgroundTasks,
     user: CurrentUserDep,
     db: DbDep,
     settings: SettingsDep,
@@ -406,10 +295,8 @@ def reprocess_stale(
         db.table("documents").update({"status": "pending", "error": None}).eq(
             "id", row["id"]
         ).execute()
-        background.add_task(
-            _ingest, row["id"], None, row["storage_path"], row["filename"],
-            row["mime_type"], user.id, user.token, settings,
-        )
+        _enqueue(db, settings, row["id"], user.id, row["filename"],
+                 row["mime_type"], row["storage_path"])
     return {"count": len(stale)}
 
 
@@ -420,7 +307,6 @@ def reprocess_stale(
 )
 def reprocess_document(
     document_id: str,
-    background: BackgroundTasks,
     response: Response,
     user: CurrentUserDep,
     db: DbDep,
@@ -452,10 +338,8 @@ def reprocess_document(
     db.table("documents").update({"status": "pending", "error": None}).eq(
         "id", document_id
     ).execute()
-    background.add_task(
-        _ingest, document_id, None, row["storage_path"], row["filename"],
-        row["mime_type"], user.id, user.token, settings,
-    )
+    _enqueue(db, settings, document_id, user.id, row["filename"],
+             row["mime_type"], row["storage_path"])
     row["status"] = "pending"
     return _to_out(row, current)
 
