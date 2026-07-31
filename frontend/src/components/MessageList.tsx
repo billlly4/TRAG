@@ -75,8 +75,17 @@ function SourceList({ sources }: { sources: Source[] }) {
             )}
             {' · chunk '}
             {s.ordinal}
-            {' · similarity '}
-            {s.similarity.toFixed(3)}
+            {/* Cosine is omitted for keyword-only hits, where it is 0 by
+                construction and would read as "irrelevant" for a passage that
+                was matched exactly. */}
+            {s.similarity > 0 && ` · cos ${s.similarity.toFixed(3)}`}
+            {/* Shown whenever reranking ran, because it is what the list is
+                sorted by — without it the numbers appear out of order. */}
+            {s.rerank_score !== null && (
+              <span className="text-zinc-400">
+                {` · rerank ${s.rerank_score > 0 ? '+' : ''}${s.rerank_score.toFixed(2)}`}
+              </span>
+            )}
           </li>
         ))}
       </ol>

@@ -10,7 +10,8 @@ from ..deps import CurrentUserDep, DbDep, SettingsDep
 from ..embeddings import EmbeddingError
 from ..llm import SYSTEM_PROMPT, get_client, sanitize_for_api
 from ..metadata import DOC_TYPES
-from ..retrieval import Filters, search
+from ..config import get_settings
+from ..retrieval import Filters, hybrid_search, search
 from ..schemas import ChatRequest
 
 log = logging.getLogger(__name__)
@@ -141,8 +142,15 @@ def _run_search(db, tool_input: dict[str, Any]) -> tuple[str, list[dict], bool]:
         year_max=year_max if isinstance(year_max, int) else None,
     )
 
+    settings = get_settings()
+    k = top_k if isinstance(top_k, int) else None
     try:
-        hits = search(db, query, top_k if isinstance(top_k, int) else None, filters)
+        # Same signature either way, so the tool schema and everything the model
+        # sees are unchanged -- switching retrieval strategies is invisible to it.
+        if settings.retrieval_hybrid:
+            hits = hybrid_search(db, query, k, filters)
+        else:
+            hits = search(db, query, k, filters)
     except EmbeddingError as exc:
         return f"Search unavailable: {exc}", [], True
 
@@ -178,6 +186,14 @@ def _run_search(db, tool_input: dict[str, Any]) -> tuple[str, list[dict], bool]:
                 "section": h.section,
                 "ordinal": h.ordinal,
                 "similarity": round(h.similarity, 3),
+                # Sent so the UI can show the score the list is actually
+                # ORDERED by. Displaying cosine alone next to a reranked
+                # ranking shows numbers that contradict the order, and a
+                # keyword-only hit would read as 0.000 -- looking irrelevant
+                # when it was matched exactly.
+                "rerank_score": (
+                    round(h.rerank_score, 2) if h.rerank_score is not None else None
+                ),
             }
         )
     return "\n\n".join(parts), sources, False

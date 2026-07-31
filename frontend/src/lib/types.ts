@@ -85,7 +85,14 @@ export interface Source {
   /** Markdown heading path the passage sits under, when the document had one. */
   section: string | null
   ordinal: number
+  /** Vector cosine. 0 for a hit found only by the keyword channel. */
   similarity: number
+  /**
+   * Cross-encoder score, null when reranking is off. When present this is what
+   * the list is ORDERED by, so it has to be shown — cosine alone next to a
+   * reranked ranking displays numbers that contradict the order.
+   */
+  rerank_score: number | null
 }
 
 /** Frames emitted by POST /api/chat over SSE. */
