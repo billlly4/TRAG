@@ -67,3 +67,29 @@ def extraction_config() -> dict:
 def config_hash() -> str:
     canonical = json.dumps(extraction_config(), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+# The subset of extraction_config() that the EXTRACTOR process controls. Must
+# stay identical to extractor/pipeline.py:extraction_settings() -- same keys,
+# same serialisation -- or the drift check cries wolf on every extraction.
+_EXTRACTOR_OWNED_KEYS = (
+    "do_ocr",
+    "do_table_structure",
+    "describe_pictures",
+    "vlm_model",
+    "vlm_prompt_sha256",
+)
+
+
+def local_extraction_fingerprint() -> str:
+    """What this process believes the extractor is configured to do.
+
+    Compared against the fingerprint the extractor returns with every
+    conversion. They can only disagree if the two processes read different
+    configuration -- at which point config_hash is describing a pipeline that
+    never ran, and nothing else in the system would notice.
+    """
+    cfg = extraction_config()
+    subset = {k: cfg[k] for k in _EXTRACTOR_OWNED_KEYS}
+    canonical = json.dumps(subset, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()

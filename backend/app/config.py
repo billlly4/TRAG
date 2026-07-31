@@ -84,6 +84,15 @@ class Settings(BaseSettings):
     vlm_model: str = "qwen2.5vl:7b"
     describe_pictures: bool = True
 
+    # Extraction runs in a SEPARATE PROCESS (backend/extractor). docling wraps
+    # native model runtimes that can segfault, and one did -- taking the API
+    # down with it. Out of process, that costs an extraction instead of the
+    # server. Must stay on loopback: the service is unauthenticated by design.
+    extractor_url: str = "http://127.0.0.1:8001"
+    # Generous on purpose. A large PDF with VLM captioning legitimately runs for
+    # minutes; Module 2 measured 56s for one page with a single figure.
+    extractor_timeout: float = 600.0
+
     # 800 tokens is chosen for retrieval precision, not model limits -- the
     # embedding model's 8192-token window is 10x this target.
     chunk_target_tokens: int = 800
