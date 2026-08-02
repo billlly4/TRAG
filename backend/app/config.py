@@ -75,7 +75,14 @@ class Settings(BaseSettings):
     # Anthropic has no embeddings endpoint, so embeddings come from Ollama.
     # EMBEDDING_DIM must match the vector(768) column in 0002_retrieval.sql --
     # changing the model means a new migration and re-embedding the corpus.
-    ollama_base_url: str = "http://localhost:11434"
+    # 127.0.0.1, never `localhost`. Measured: resolving `localhost` on Windows
+    # costs ~2.08s per connection -- an IPv6 ::1 attempt that times out before
+    # falling back to IPv4. That is not a theory: `GET /api/version`, which
+    # returns a string and touches no model, took 2198ms via `localhost` and
+    # 157ms via `127.0.0.1`. It made every query embedding look 40x slower than
+    # the model actually is. Ollama binds loopback IPv4 by default; point a real
+    # host here via OLLAMA_BASE_URL if it runs elsewhere.
+    ollama_base_url: str = "http://127.0.0.1:11434"
     embedding_model: str = "nomic-embed-text"
     embedding_dim: int = 768
 

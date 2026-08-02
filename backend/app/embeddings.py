@@ -8,6 +8,8 @@ quietly gets worse. Two functions exist so the call site cannot get the
 prefix wrong.
 """
 
+import threading
+
 import httpx
 
 from .config import get_settings
@@ -15,33 +17,80 @@ from .config import get_settings
 _DOCUMENT_PREFIX = "search_document: "
 _QUERY_PREFIX = "search_query: "
 
+_client: httpx.Client | None = None
+_client_url: str | None = None
+_client_lock = threading.Lock()
+
 
 class EmbeddingError(RuntimeError):
     pass
 
 
+def _get_client(base_url: str) -> httpx.Client:
+    """One pooled client for the whole process, shared across threads.
+
+    A client per call meant a fresh TCP connection every time. Measured, a
+    reused connection answers in under a millisecond where a new one cost
+    seconds, so the pool is most of the win here -- the address change in
+    `config.py` only removes the resolution penalty.
+
+    Safe to share where the Supabase client is emphatically NOT: this client
+    carries no credentials and no per-user state. Ollama is unauthenticated and
+    bound to loopback, so nothing here identifies a caller and two users' calls
+    cannot borrow each other's identity. Do not add Authorization headers to it.
+
+    httpx.Client is documented as thread-safe; the lock guards construction so
+    two threads cannot each build one and leak the loser's sockets.
+    """
+    global _client, _client_url
+    with _client_lock:
+        if _client is None or _client_url != base_url:
+            if _client is not None:
+                _client.close()
+            _client = httpx.Client(
+                base_url=base_url,
+                timeout=httpx.Timeout(300.0, connect=5.0),
+            )
+            _client_url = base_url
+    return _client
+
+
 def _embed(inputs: list[str]) -> list[list[float]]:
     settings = get_settings()
-    url = f"{settings.ollama_base_url.rstrip('/')}/api/embed"
+    base_url = settings.ollama_base_url.rstrip("/")
+    client = _get_client(base_url)
+    payload = {"model": settings.embedding_model, "input": inputs}
 
     # Fail loudly. A document stuck at status='embedding' because the daemon is
     # down should surface as a readable error in documents.error, not a hang.
-    try:
-        resp = httpx.post(
-            url,
-            json={"model": settings.embedding_model, "input": inputs},
-            timeout=httpx.Timeout(300.0, connect=5.0),
-        )
-        resp.raise_for_status()
-    except httpx.ConnectError as exc:
-        raise EmbeddingError(
-            f"Ollama unreachable at {settings.ollama_base_url} -- is the daemon "
-            f"running? (`ollama serve`)"
-        ) from exc
-    except httpx.HTTPStatusError as exc:
-        raise EmbeddingError(
-            f"Ollama embed failed ({exc.response.status_code}): {exc.response.text[:300]}"
-        ) from exc
+    #
+    # The retry is the cost of pooling: a kept-alive connection can be closed by
+    # the far end -- an Ollama restart, or its idle timeout -- and the next use
+    # of that dead socket fails before the request is even sent. Retrying once
+    # on a fresh connection turns that into a blip instead of a failed job.
+    # ConnectError is deliberately NOT retried: it means the daemon is down, so
+    # a second attempt only delays a message the caller needs now.
+    for attempt in (1, 2):
+        try:
+            resp = client.post("/api/embed", json=payload)
+            resp.raise_for_status()
+            break
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError) as exc:
+            if attempt == 1:
+                continue
+            raise EmbeddingError(
+                f"Ollama connection kept failing at {base_url}: {exc}"
+            ) from exc
+        except httpx.ConnectError as exc:
+            raise EmbeddingError(
+                f"Ollama unreachable at {base_url} -- is the daemon "
+                f"running? (`ollama serve`)"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise EmbeddingError(
+                f"Ollama embed failed ({exc.response.status_code}): "
+                f"{exc.response.text[:300]}"
+            ) from exc
 
     embeddings = resp.json().get("embeddings")
     if not embeddings or len(embeddings) != len(inputs):
