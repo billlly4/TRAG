@@ -1,46 +1,14 @@
-"""Anthropic client, traced by LangSmith.
+"""The system prompt, and the rules for replaying stored blocks to the API.
 
-`wrap_anthropic` is observability, not a framework -- it patches the client so
-calls show up in LangSmith and otherwise changes nothing about the SDK surface.
-No LangChain is involved.
+The Anthropic client used to live here, wrapped by LangSmith's
+`wrap_anthropic`. Both are gone: the app reaches Claude through ChatAnthropic
+now, and LangChain traces to LangSmith natively.
+
+That removal took the LangSmith environment export with it -- it only ran inside
+`get_client()`, so when nothing called that any more, tracing stopped without an
+error to say so. The export now lives in `config.get_settings`, where every
+entry point reaches it just by reading settings.
 """
-
-import os
-
-from anthropic import Anthropic
-from langsmith.wrappers import wrap_anthropic
-
-from .config import Settings, get_settings
-
-_client: Anthropic | None = None
-
-
-def _export_langsmith_env(settings: Settings) -> None:
-    """Publish LangSmith config into os.environ.
-
-    pydantic-settings reads .env into a Settings object; it does NOT populate
-    os.environ. The LangSmith SDK only reads os.environ, so without this step
-    tracing silently no-ops even though the key is sitting in .env.
-    """
-    os.environ["LANGSMITH_TRACING"] = "true" if settings.langsmith_tracing else "false"
-    os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
-    os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
-    if settings.langsmith_api_key:
-        os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
-    if settings.langsmith_workspace_id:
-        os.environ["LANGSMITH_WORKSPACE_ID"] = settings.langsmith_workspace_id
-
-
-def get_client() -> Anthropic:
-    global _client
-    if _client is None:
-        settings = get_settings()
-        _export_langsmith_env(settings)
-
-        base = Anthropic(api_key=settings.anthropic_api_key)
-        _client = wrap_anthropic(base) if settings.langsmith_tracing else base
-    return _client
-
 
 # Fields the Messages API accepts on *input* for each block type. The SDK's
 # response models carry extra fields that are not valid to send back -- notably

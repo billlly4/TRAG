@@ -26,10 +26,11 @@ import logging
 from datetime import date
 from typing import Literal, get_args
 
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from .config import get_settings
-from .llm import get_client
 
 log = logging.getLogger(__name__)
 
@@ -162,36 +163,53 @@ def extract_metadata(
         return None, "No text to extract metadata from"
 
     try:
-        # beta.messages.parse, not messages.parse, ON PURPOSE: LangSmith's
-        # wrap_anthropic patches client.beta.messages.parse and NOT
-        # client.messages.parse (langsmith/wrappers/_anthropic.py). The
-        # non-beta call works fine and is completely invisible in tracing.
-        response = get_client().beta.messages.parse(
+        # `with_structured_output` rather than a raw Anthropic call. The old
+        # version had to use `beta.messages.parse` specifically, because
+        # LangSmith's wrap_anthropic patches the beta path and not the stable
+        # one -- the stable call worked but was invisible in tracing. LangChain
+        # traces natively, so that constraint is gone along with the workaround.
+        #
+        # PROMPT AND SCHEMA ARE UNCHANGED, deliberately: prompt_fingerprint()
+        # hashes both into config_hash, so editing either here would mark every
+        # document in every corpus stale and force a full re-ingest.
+        #
+        # include_raw keeps the underlying message reachable, which the
+        # truncation check below needs -- the parsed-only form discards
+        # stop_reason.
+        model = ChatAnthropic(
             model=settings.metadata_model,
+            api_key=settings.anthropic_api_key,
             max_tokens=METADATA_MAX_TOKENS,
-            system=METADATA_PROMPT,
-            output_format=DocumentMetadata,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
+        ).with_structured_output(DocumentMetadata, include_raw=True)
+
+        result = model.invoke(
+            [
+                SystemMessage(content=METADATA_PROMPT),
+                HumanMessage(
+                    content=(
                         f"Filename: {filename}\n\n"
                         f"--- start of document ---\n{head}"
-                    ),
-                }
-            ],
+                    )
+                ),
+            ]
         )
+
+        raw = result.get("raw")
+        stop_reason = (getattr(raw, "response_metadata", None) or {}).get("stop_reason")
 
         # A truncated structured response is unparseable, not merely short, so
         # this is usually caught below -- but check explicitly, because a
         # schema that just fits produces a valid object built from a cut-off
         # reading of the document.
-        if response.stop_reason == "max_tokens":
+        if stop_reason == "max_tokens":
             return None, "Metadata extraction hit max_tokens"
 
-        meta = response.parsed_output
+        if result.get("parsing_error"):
+            return None, f"Metadata parse failed: {result['parsing_error']}"[:500]
+
+        meta = result.get("parsed")
         if meta is None:
-            return None, f"No structured output (stop_reason={response.stop_reason})"
+            return None, f"No structured output (stop_reason={stop_reason})"
 
         log.info(
             "metadata for %s: type=%s org=%s year=%s topics=%d",

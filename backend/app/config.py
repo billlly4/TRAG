@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -289,6 +290,39 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
+def _export_langsmith(settings: Settings) -> None:
+    """Publish LangSmith config into the process environment.
+
+    LangChain and LangGraph read tracing config from os.environ, but
+    pydantic-settings loads .env into the Settings object and does NOT export
+    it -- so with nothing here, LANGSMITH_TRACING=true in .env produces a
+    Settings that says tracing is on and a LangChain that never traces. No
+    error, no warning; observability just quietly stops.
+
+    That gap opened when the raw Anthropic client (patched by
+    `wrap_anthropic`, which read Settings directly) was replaced with
+    ChatAnthropic. Doing it here rather than in one module means every entry
+    point -- API, worker, extractor, eval harness -- is covered by the act of
+    reading settings at all.
+
+    Real environment variables win: setdefault, not assignment, so an operator
+    override on the command line is not silently discarded.
+    """
+    if not settings.langsmith_tracing:
+        return
+    for key, value in (
+        ("LANGSMITH_TRACING", "true"),
+        ("LANGSMITH_API_KEY", settings.langsmith_api_key),
+        ("LANGSMITH_ENDPOINT", settings.langsmith_endpoint),
+        ("LANGSMITH_PROJECT", settings.langsmith_project),
+        ("LANGSMITH_WORKSPACE_ID", settings.langsmith_workspace_id),
+    ):
+        if value:
+            os.environ.setdefault(key, str(value))
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    _export_langsmith(settings)
+    return settings
