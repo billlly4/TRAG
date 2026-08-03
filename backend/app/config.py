@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -172,6 +173,36 @@ class Settings(BaseSettings):
     # it is given, and the reranker can only rescue a passage that survived
     # retrieval in the first place.
     rerank_candidates: int = 20
+
+    # "auto" uses the GPU when torch reports one, else CPU. "cpu" forces CPU;
+    # "cuda" asks for GPU and warns (rather than crashes) if torch was built
+    # without it -- which is the state this project shipped in until measuring
+    # showed the reranker was 90% of retrieval time purely for being on the
+    # wrong device.
+    #
+    # The card is shared with Ollama, so rerank.py demotes itself to CPU on a
+    # CUDA OOM rather than failing the request.
+    rerank_device: Literal["auto", "cpu", "cuda"] = "auto"
+
+    # Torch threads PER rerank call. CPU only -- ignored on GPU. Reranking runs concurrently now, so this is
+    # a share of the machine rather than a cap on its one exclusive user.
+    #
+    # Measured on 16 cores, 20 candidates, rather than reasoned about -- the
+    # arithmetic answer (threads x callers ~= cores, so 2) is wrong at both ends:
+    #
+    #   threads   c=1 p50   c=10 p50   c=10 max
+    #         1     3080ms     6185ms     6769ms
+    #         2     1752ms     4992ms     5700ms
+    #         3     1287ms     4753ms     5072ms   <-- best at BOTH
+    #         4     1047ms     5336ms     5669ms
+    #         8      909ms     5474ms     5715ms
+    #
+    # 3 is not a compromise: c=1 lands at 1287ms against the old locked build's
+    # 1281ms, so single-user latency is unchanged while the ten-user tail falls
+    # from 13.3s to 5.1s. Above 3 the extra threads win at c=1 and lose under
+    # load; below it, everything is worse. Re-measure on a different core count
+    # -- this number is a property of the machine, not of the model.
+    rerank_torch_threads: int = 3
 
     # 22M params, ~90MB, English. Roughly 30-80ms for 20 passages on CPU, which
     # is what makes it viable in the chat path. bge-reranker-v2-m3 is cached

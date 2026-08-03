@@ -18,9 +18,33 @@ dependencies = [
     # Golden set format. Already present as a docling transitive dependency,
     # declared explicitly because backend/evaluation imports it directly.
     "pyyaml>=6.0",
+    # Arrives transitively via docling anyway; declared explicitly so the CUDA
+    # index below applies to it. See [tool.uv.sources].
+    "torch>=2.13",
 ]
 
 [tool.uv]
 # This repo is an application, not a distributable package. Without this, uv
 # tries to build a `trag` package, finds no matching source directory, and fails.
 package = false
+
+# CUDA build of torch, not the CPU default.
+#
+# The reranker is a 22M-parameter cross-encoder and it was taking 1351 ms for 20
+# candidates -- 90% of retrieval time at a single user -- because pip's default
+# torch wheel is `+cpu` and the RTX 3060 sat idle beside it. Nothing in the
+# application changes; only which wheel gets installed.
+#
+# cu126 specifically: it is the only index carrying torch 2.13.0 for cp313 on
+# win_amd64 (cu121/cu124/cu128 do not), and driver 572.61 reports CUDA 12.8,
+# which runs cu126 wheels fine. Check the index before changing this number.
+#
+# The extractor shares this environment, so docling's layout models get the GPU
+# too -- a side effect worth knowing about when reasoning about ingestion time.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
