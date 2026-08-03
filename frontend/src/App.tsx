@@ -38,12 +38,15 @@ function Chat({ email, onSignOut }: { email?: string; onSignOut: () => void }) {
             streamText={chat.streamText}
             streaming={chat.streaming}
             liveTools={chat.liveTools}
+            liveWeb={chat.liveWeb}
             error={chat.error}
             truncated={chat.truncated}
           />
           <Composer
             streaming={chat.streaming}
             full={chat.chatFull}
+            webSearch={chat.webSearch}
+            onWebSearchChange={chat.setWebSearch}
             onSend={(text) => void chat.send(text)}
             onStop={chat.stop}
           />

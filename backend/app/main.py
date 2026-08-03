@@ -16,6 +16,12 @@ logging.basicConfig(
     format="%(levelname)-8s %(name)s: %(message)s",
 )
 
+# httpx logs every request at INFO. The worker polls the queue every 3s, so at
+# INFO its log is almost entirely "claim_ingest_job 200 OK" heartbeats and a
+# real failure scrolls past between them. Warnings and errors still surface --
+# this hides the successes, not the problems.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 settings = get_settings()
 
 app = FastAPI(title="TRAG API", version="0.1.0")

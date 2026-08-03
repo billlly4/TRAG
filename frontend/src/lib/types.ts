@@ -119,6 +119,26 @@ export interface Source {
   rerank_score?: number | null
 }
 
+/**
+ * A metadata query the agent ran, and how much it returned. The SQL is the
+ * attribution: a bare number ("you have 12 documents") is unauditable, while
+ * the query that produced it can be read and disagreed with.
+ */
+export interface SqlResult {
+  sql: string
+  row_count: number
+  truncated?: boolean
+  error?: string
+}
+
+/** A page returned by the server-side web_search tool. */
+export interface WebResult {
+  url: string
+  title: string
+  /** Anthropic's freshness hint, e.g. "March 12, 2026". Often absent. */
+  page_age?: string | null
+}
+
 /** Frames emitted by POST /api/chat over SSE. */
 export type ChatFrame =
   | { type: 'delta'; text: string }
@@ -126,13 +146,27 @@ export type ChatFrame =
       type: 'tool_use'
       id: string
       name: string
-      input: { query?: string; top_k?: number }
+      input: { query?: string; top_k?: number; sql?: string }
     }
   | {
       type: 'tool_result'
       tool_use_id: string
       sources: Source[]
+      /** Present only for query_document_metadata calls. */
+      sql?: SqlResult | null
       is_error: boolean
+    }
+  | {
+      /**
+       * Web search runs on Anthropic's infrastructure, so its results arrive
+       * with the assistant turn rather than through the tool loop — hence a
+       * frame of its own rather than a `tool_result`.
+       */
+      type: 'web_results'
+      tool_use_id: string | null
+      results: WebResult[]
+      /** Set when the search itself failed; results is then empty. */
+      error: string | null
     }
   | {
       type: 'done'
@@ -169,6 +203,41 @@ export function toolSources(content: ContentBlock[]): Source[] {
   return content
     .filter((b) => b.type === 'tool_result')
     .flatMap((b) => ((b as { sources?: Source[] }).sources ?? []))
+}
+
+/** Metadata queries carried by a message's tool_result blocks. */
+export function toolSqlResults(content: ContentBlock[]): SqlResult[] {
+  return content
+    .filter((b) => b.type === 'tool_result')
+    .map((b) => (b as { sql?: SqlResult | null }).sql)
+    .filter((s): s is SqlResult => !!s && typeof s.sql === 'string')
+}
+
+/**
+ * Web pages carried by an assistant turn's web_search_tool_result blocks.
+ *
+ * Reads the persisted Anthropic block shape rather than our own, because these
+ * blocks are stored verbatim — they have to round-trip unchanged for replay, so
+ * there is nowhere to put a friendlier field. A failed search stores `content`
+ * as an error OBJECT rather than an array, which is why the isArray check is
+ * load-bearing: without it a failure renders as "no sources" instead of a
+ * failure.
+ */
+export function webResults(content: ContentBlock[]): WebResult[] {
+  return content
+    .filter((b) => b.type === 'web_search_tool_result')
+    .flatMap((b) => {
+      const inner = (b as { content?: unknown }).content
+      if (!Array.isArray(inner)) return []
+      return inner
+        .filter((r): r is { url: string; title?: string; page_age?: string } =>
+          !!r && typeof (r as { url?: unknown }).url === 'string')
+        .map((r) => ({
+          url: r.url,
+          title: r.title || r.url,
+          page_age: r.page_age ?? null,
+        }))
+    })
 }
 
 /** True for the synthetic user turns that only carry tool results. */

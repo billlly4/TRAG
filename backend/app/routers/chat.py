@@ -13,6 +13,7 @@ from ..metadata import DOC_TYPES
 from ..config import get_settings
 from ..retrieval import Filters, hybrid_search, search
 from ..schemas import ChatRequest
+from ..sql_tool import SQL_TOOL, run_sql
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +115,61 @@ def corpus_summary(db) -> str:
 
 def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
+
+
+def build_tools(settings: Any, *, web_search: bool) -> list[dict[str, Any]]:
+    """The tool set for one request.
+
+    Web search is gated by CAPABILITY, not by instruction: when the user has not
+    asked for it the tool is simply absent, so the model cannot reach for it. A
+    system prompt saying "don't search the web" is a request; an undeclared tool
+    is a guarantee. That is what keeps a document question the corpus cannot
+    answer landing on abstention instead of quietly becoming a web answer.
+
+    A function rather than inline code so the guarantee can be asserted directly
+    -- observing that no web results came back only shows the model chose not to
+    search, which is a much weaker claim than the tool not being offered.
+    """
+    tools: list[dict[str, Any]] = [SEARCH_TOOL]
+    if settings.sql_tool_enabled:
+        tools.append(SQL_TOOL)
+    if web_search and settings.web_search_enabled:
+        tools.append(
+            {
+                "type": settings.web_search_tool_version,
+                "name": "web_search",
+                "max_uses": settings.web_search_max_uses,
+            }
+        )
+    return tools
+
+
+def _web_results(block: Any) -> tuple[list[dict], str | None]:
+    """Pull (results, error) out of a web_search_tool_result block.
+
+    Web search failures arrive as a successful HTTP 200 whose `content` is a
+    single error object rather than a list -- there is no exception to catch.
+    Treating that shape as an empty result set would render a failed search as
+    "found nothing", which is a different and much more misleading claim.
+    """
+    content = getattr(block, "content", None)
+    if not isinstance(content, list):
+        code = getattr(content, "error_code", None) or "unknown_error"
+        return [], str(code)
+
+    results = []
+    for item in content:
+        url = getattr(item, "url", None)
+        if not url:
+            continue
+        results.append(
+            {
+                "url": url,
+                "title": getattr(item, "title", None) or url,
+                "page_age": getattr(item, "page_age", None),
+            }
+        )
+    return results, None
 
 
 def _run_search(db, tool_input: dict[str, Any]) -> tuple[str, list[dict], bool]:
@@ -267,6 +323,8 @@ def chat(
     # mid-answer, and re-querying it on every loop iteration would be waste.
     system_prompt = SYSTEM_PROMPT + corpus_summary(db)
 
+    tools = build_tools(settings, web_search=body.web_search)
+
     def persist(role: str, content: list[dict], **extra: Any) -> dict:
         res = (
             db.table("messages")
@@ -292,7 +350,7 @@ def chat(
                     "model": settings.anthropic_model,
                     "max_tokens": settings.max_output_tokens,
                     "system": system_prompt,
-                    "tools": [SEARCH_TOOL],
+                    "tools": tools,
                     "messages": messages,
                 }
                 # Last permitted turn: force prose so the loop cannot end on a
@@ -305,6 +363,22 @@ def chat(
                         yield _sse({"type": "delta", "text": text})
                     final = stream.get_final_message()
 
+                # Web search runs on Anthropic's side, so its results arrive as
+                # blocks in this response rather than through the tool loop
+                # below. Surfaced separately so the UI can attribute a web claim
+                # to a URL instead of to the user's documents.
+                for block in final.content:
+                    if block.type == "web_search_tool_result":
+                        results, error = _web_results(block)
+                        yield _sse(
+                            {
+                                "type": "web_results",
+                                "tool_use_id": getattr(block, "tool_use_id", None),
+                                "results": results,
+                                "error": error,
+                            }
+                        )
+
                 content = [b.model_dump() for b in final.content]
                 usage = final.usage.model_dump() if final.usage else None
                 saved = persist(
@@ -313,6 +387,14 @@ def chat(
                 messages.append(
                     {"role": "assistant", "content": sanitize_for_api(content)}
                 )
+
+                # A server-side tool that hits its own iteration limit stops with
+                # 'pause_turn' and expects to be re-sent to resume. The assistant
+                # turn is already appended, so continuing the loop IS the resume;
+                # breaking here instead would end the stream mid-answer with no
+                # error to explain it.
+                if final.stop_reason == "pause_turn":
+                    continue
 
                 if final.stop_reason != "tool_use":
                     break
@@ -333,17 +415,27 @@ def chat(
                             "input": tool_input,
                         }
                     )
-                    text, sources, is_error = _run_search(db, tool_input)
+                    # Dispatch on name: structured questions go to SQL, content
+                    # questions to retrieval. Both return the same triple so the
+                    # rest of this loop does not care which ran.
+                    sql_meta: dict | None = None
+                    sources: list[dict] = []
+                    if block.name == SQL_TOOL["name"]:
+                        text, sql_meta, is_error = run_sql(db, tool_input)
+                    else:
+                        text, sources, is_error = _run_search(db, tool_input)
+
                     yield _sse(
                         {
                             "type": "tool_result",
                             "tool_use_id": block.id,
                             "sources": sources,
+                            "sql": sql_meta,
                             "is_error": is_error,
                         }
                     )
-                    # `sources` is for the UI on reload; sanitize_for_api
-                    # strips it before the blocks are replayed to the API,
+                    # `sources` / `sql` are for the UI on reload; sanitize_for_api
+                    # strips them before the blocks are replayed to the API,
                     # same as Module 1 did with citation spans.
                     result: dict[str, Any] = {
                         "type": "tool_result",
@@ -351,6 +443,8 @@ def chat(
                         "content": text,
                         "sources": sources,
                     }
+                    if sql_meta is not None:
+                        result["sql"] = sql_meta
                     if is_error:
                         result["is_error"] = True
                     results.append(result)

@@ -79,6 +79,10 @@ class ChatRequest(BaseModel):
     thread_id: str
     message: str = Field(min_length=1)
 
+    # Per-message opt-in. False means the web_search tool is not declared at all
+    # for this turn, so the model cannot use it -- capability, not instruction.
+    web_search: bool = False
+
 
 # --- documents ---------------------------------------------------------------
 

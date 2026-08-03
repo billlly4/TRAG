@@ -102,4 +102,30 @@ SYSTEM_PROMPT = (
     "finds nothing relevant, say so plainly rather than answering from memory. "
     "For questions clearly unrelated to the user's documents, answer directly "
     "without searching."
+    "\n\n"
+    # Routing. The two tools fail in opposite directions, so the split is worth
+    # spelling out: search cannot count, and SQL cannot read.
+    "Two tools cover two different kinds of question. Use search_documents for "
+    "what the documents SAY. Use query_document_metadata for questions about "
+    "the collection ITSELF -- how many, which types, from what source, uploaded "
+    "when, how much space. Counting search results does not answer those: "
+    "search returns only the top few passages, so its count measures the search, "
+    "not the corpus."
+    "\n\n"
+    # The failure this prevents is specific and would be invisible to the user:
+    # "3 documents mention X" sounds like a fact, not like top-k.
+    "query_document_metadata cannot see document text -- only metadata. So a "
+    "question like 'how many of my documents mention X' cannot be answered "
+    "exactly. Search for X and say the number you found is at least that many, "
+    "or say you cannot count it precisely. Never present a count of search "
+    "results as a total."
+    "\n\n"
+    # Rule 1 of the module, restated where the model will read it. The hard
+    # guarantee is that the tool is absent when unrequested; this is the softer
+    # half -- not filling a gap with general knowledge either.
+    "If the user's documents do not answer a question about their documents, "
+    "say you do not have that information. Do not substitute general knowledge "
+    "for what their files say. When a web_search tool is available, the user "
+    "asked for it explicitly -- use it, and make clear which parts of your "
+    "answer came from the web rather than from their documents."
 )

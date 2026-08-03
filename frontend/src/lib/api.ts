@@ -72,6 +72,7 @@ interface StreamHandlers {
   onDelta: (text: string) => void
   onToolUse: (frame: Extract<ChatFrame, { type: 'tool_use' }>) => void
   onToolResult: (frame: Extract<ChatFrame, { type: 'tool_result' }>) => void
+  onWebResults: (frame: Extract<ChatFrame, { type: 'web_results' }>) => void
   onDone: (frame: Extract<ChatFrame, { type: 'done' }>) => void
   onError: (detail: string) => void
 }
@@ -88,13 +89,17 @@ export async function streamChat(
   message: string,
   handlers: StreamHandlers,
   signal?: AbortSignal,
+  webSearch = false,
 ): Promise<void> {
   let res: Response
   try {
     res = await fetch(`${BASE}/api/chat`, {
       method: 'POST',
       headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ thread_id: threadId, message }),
+      // web_search is per-message on purpose: the backend only declares the
+      // web tool when this is true, so an un-toggled message cannot reach the
+      // web even if the model wanted to.
+      body: JSON.stringify({ thread_id: threadId, message, web_search: webSearch }),
       signal,
     })
   } catch (err) {
@@ -137,6 +142,7 @@ export async function streamChat(
       if (frame.type === 'delta') handlers.onDelta(frame.text)
       else if (frame.type === 'tool_use') handlers.onToolUse(frame)
       else if (frame.type === 'tool_result') handlers.onToolResult(frame)
+      else if (frame.type === 'web_results') handlers.onWebResults(frame)
       else if (frame.type === 'done') handlers.onDone(frame)
       else if (frame.type === 'error') handlers.onError(frame.detail)
     }

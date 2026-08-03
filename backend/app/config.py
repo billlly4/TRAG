@@ -209,6 +209,32 @@ class Settings(BaseSettings):
 
     max_tool_turns: int = 5
 
+    # --- Module 7 tools ------------------------------------------------------
+
+    # Text-to-SQL over document metadata. Requires 0011_text_to_sql.sql to have
+    # been applied; without it every call comes back as a missing-function error
+    # the model cannot fix, so turn this off rather than half-install it.
+    sql_tool_enabled: bool = True
+
+    # Web search is requested PER MESSAGE by the user (ChatRequest.web_search).
+    # This flag is the operator's off switch on top of that -- when false the
+    # tool is never declared no matter what the client asks for.
+    #
+    # Deliberately not a fallback for failed retrieval: a document question the
+    # corpus cannot answer must still abstain, or the app quietly stops being
+    # grounded in the user's files. Web search is something the user opts into.
+    web_search_enabled: bool = True
+
+    # 20250305 is the BASIC variant. The newer 20260209 (dynamic filtering) needs
+    # Opus 4.6+/Sonnet 4.6+ and 400s on claude-haiku-4-5 -- verified, not assumed:
+    # "'claude-haiku-4-5-20251001' does not support programmatic tool calling".
+    # Raising anthropic_model to a 4.6+ model is the only reason to change this.
+    web_search_tool_version: str = "web_search_20250305"
+
+    # Each search is billed on top of tokens, so this bounds what one message can
+    # spend without the user seeing it happen.
+    web_search_max_uses: int = 5
+
     # The account backend/evaluation signs in as. Read through Settings rather
     # than os.environ because pydantic-settings loads .env into this object and
     # does NOT export it to the process environment -- the same trap llm.py

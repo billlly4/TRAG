@@ -10,12 +10,22 @@ import { Button } from './ui'
 export function Composer({
   streaming,
   full,
+  webSearch,
+  onWebSearchChange,
   onSend,
   onStop,
 }: {
   streaming: boolean
   /** The chat hit its message limit. Readable, but no longer writable. */
   full?: boolean
+  /**
+   * Whether this message may use web search. Off by default and deliberately
+   * per-message rather than a sticky setting: turning the web on is a decision
+   * about one question, and a toggle left on last week would silently change
+   * where later answers come from.
+   */
+  webSearch: boolean
+  onWebSearchChange: (value: boolean) => void
   onSend: (text: string) => void
   onStop: () => void
 }) {
@@ -68,6 +78,25 @@ export function Composer({
           </Button>
         )}
       </div>
+
+      {/* The wording matters: without this, an unanswerable question about the
+          user's files gets "I don't have that information", and there is no way
+          to tell that was a deliberate refusal rather than a broken search. */}
+      <label className="mt-2 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <input
+          type="checkbox"
+          checked={webSearch}
+          onChange={(e) => onWebSearchChange(e.target.checked)}
+          disabled={full}
+          className="h-3.5 w-3.5 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500 dark:border-zinc-600 dark:bg-zinc-800"
+        />
+        <span>
+          Search the web for this message
+          <span className="ml-1 text-zinc-400 dark:text-zinc-500">
+            — off, answers come only from your documents
+          </span>
+        </span>
+      </label>
     </form>
   )
 }

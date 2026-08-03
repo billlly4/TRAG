@@ -1,13 +1,15 @@
 import { useEffect, useRef } from 'react'
 
 import type { LiveTool } from '../hooks/useChat'
-import type { Message, Source } from '../lib/types'
+import type { Message, Source, SqlResult, WebResult } from '../lib/types'
 import {
   blocksToCitations,
   blocksToText,
   isToolResultMessage,
   toolQueries,
   toolSources,
+  toolSqlResults,
+  webResults,
 } from '../lib/types'
 import { Banner } from './ui'
 
@@ -97,6 +99,76 @@ function SourceList({ sources }: { sources: Source[] }) {
   )
 }
 
+/**
+ * A metadata query and what it returned.
+ *
+ * The SQL is shown, not hidden behind "queried your documents". A count is a
+ * claim about the whole corpus, and the only way to judge whether it is the
+ * right count is to see which rows were counted.
+ */
+function SqlBlock({ result }: { result: SqlResult }) {
+  return (
+    <details className="my-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <summary className="cursor-pointer select-none hover:text-zinc-700 dark:hover:text-zinc-200">
+        🗄️ Queried document metadata —{' '}
+        {result.error
+          ? 'query failed'
+          : `${result.row_count} row${result.row_count === 1 ? '' : 's'}`}
+        {result.truncated && ' (truncated)'}
+      </summary>
+      <pre className="mt-1 overflow-x-auto rounded-lg bg-zinc-100 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+        {result.sql}
+      </pre>
+      {result.error && (
+        <p className="mt-1 text-red-500">{result.error}</p>
+      )}
+    </details>
+  )
+}
+
+/**
+ * Pages returned by web search.
+ *
+ * Rendered distinctly from document passages on purpose: once an answer can
+ * draw on both, "where did this come from" stops being obvious, and a web claim
+ * that looks like a corpus claim is the failure worth designing against.
+ */
+function WebSourceList({ results }: { results: WebResult[] }) {
+  if (results.length === 0) return null
+  return (
+    <details className="my-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <summary className="cursor-pointer select-none hover:text-zinc-700 dark:hover:text-zinc-200">
+        🌐 {results.length} web source{results.length === 1 ? '' : 's'} — not from
+        your documents
+      </summary>
+      <ol className="mt-1 space-y-1 border-l-2 border-sky-300 pl-3 dark:border-sky-800">
+        {results.map((r, i) => (
+          <li key={i}>
+            <a
+              href={r.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="font-medium text-sky-700 hover:underline dark:text-sky-400"
+            >
+              {r.title}
+            </a>
+            <span className="ml-1 text-zinc-400">
+              {(() => {
+                try {
+                  return new URL(r.url).hostname.replace(/^www\./, '')
+                } catch {
+                  return r.url
+                }
+              })()}
+              {r.page_age && ` · ${r.page_age}`}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </details>
+  )
+}
+
 /** Citation spans only exist on Module 1 answers; kept so old threads render. */
 function Citations({ message }: { message: Message }) {
   const cites = blocksToCitations(message.content)
@@ -132,6 +204,7 @@ export function MessageList({
   streamText,
   streaming,
   liveTools,
+  liveWeb,
   error,
   truncated,
 }: {
@@ -139,6 +212,7 @@ export function MessageList({
   streamText: string
   streaming: boolean
   liveTools: LiveTool[]
+  liveWeb: WebResult[]
   error: string | null
   truncated: boolean
 }) {
@@ -157,19 +231,33 @@ export function MessageList({
       )}
 
       {messages.map((m) => {
-        // Synthetic user turns that only carry tool results render as a
-        // source list, not as something the user said.
+        // Synthetic user turns that only carry tool results render as
+        // attribution, not as something the user said. A turn may carry both
+        // kinds when the model ran a search and a metadata query together.
         if (m.role === 'user' && isToolResultMessage(m)) {
-          return <SourceList key={m.id} sources={toolSources(m.content)} />
+          const sqls = toolSqlResults(m.content)
+          const sources = toolSources(m.content)
+          return (
+            <div key={m.id}>
+              {sqls.map((s, i) => (
+                <SqlBlock key={i} result={s} />
+              ))}
+              {(sources.length > 0 || sqls.length === 0) && (
+                <SourceList sources={sources} />
+              )}
+            </div>
+          )
         }
 
         const text = blocksToText(m.content)
         const queries = m.role === 'assistant' ? toolQueries(m.content) : []
+        const web = m.role === 'assistant' ? webResults(m.content) : []
         return (
           <div key={m.id}>
             {queries.map((q, i) => (
               <SearchMarker key={i} query={q} />
             ))}
+            {web.length > 0 && <WebSourceList results={web} />}
             {text && <Bubble role={m.role}>{text}</Bubble>}
             {m.role === 'assistant' && <Citations message={m} />}
           </div>
@@ -178,15 +266,37 @@ export function MessageList({
 
       {/* Live tool activity for the in-flight turn */}
       {streaming &&
-        liveTools.map((t, i) => (
-          <div key={i}>
-            <SearchMarker query={t.query} pending={t.sources === null} />
-            {t.sources !== null && !t.isError && <SourceList sources={t.sources} />}
-            {t.isError && (
-              <p className="my-1 text-xs text-red-500">Search failed.</p>
-            )}
-          </div>
-        ))}
+        liveTools.map((t, i) => {
+          const pending = t.sources === null && t.sql === null
+          if (t.kind === 'sql') {
+            return (
+              <div key={i}>
+                {pending ? (
+                  <p className="my-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-500 align-middle" />
+                    Querying document metadata…
+                  </p>
+                ) : t.sql ? (
+                  <SqlBlock result={t.sql} />
+                ) : null}
+                {t.isError && !t.sql && (
+                  <p className="my-1 text-xs text-red-500">Metadata query failed.</p>
+                )}
+              </div>
+            )
+          }
+          return (
+            <div key={i}>
+              <SearchMarker query={t.query} pending={pending} />
+              {t.sources !== null && !t.isError && <SourceList sources={t.sources} />}
+              {t.isError && (
+                <p className="my-1 text-xs text-red-500">Search failed.</p>
+              )}
+            </div>
+          )
+        })}
+
+      {streaming && liveWeb.length > 0 && <WebSourceList results={liveWeb} />}
 
       {streaming && streamText && (
         <Bubble role="assistant">

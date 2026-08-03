@@ -2,13 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import * as api from '../lib/api'
 import { supabase } from '../lib/supabase'
-import type { DocumentMeta, Message, Source, Thread, Usage } from '../lib/types'
+import type {
+  DocumentMeta, Message, Source, SqlResult, Thread, Usage, WebResult,
+} from '../lib/types'
 
-/** A search the assistant is running (or has run) during the live turn. */
+/** A tool call the assistant is running (or has run) during the live turn. */
 export interface LiveTool {
+  /** Which channel ran — the UI renders each differently. */
+  kind: 'search' | 'sql'
+  /** The search query, or the SQL for a metadata query. */
   query: string
-  /** null while the search is still executing */
+  /** null while the call is still executing */
   sources: Source[] | null
+  sql: SqlResult | null
   isError: boolean
 }
 
@@ -22,6 +28,8 @@ export function useChat() {
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
   const [liveTools, setLiveTools] = useState<LiveTool[]>([])
+  const [liveWeb, setLiveWeb] = useState<WebResult[]>([])
+  const [webSearch, setWebSearch] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
@@ -146,6 +154,7 @@ export function useChat() {
       setStreaming(true)
       setStreamText('')
       setLiveTools([])
+      setLiveWeb([])
 
       // Optimistic user message so the input clears and the turn appears
       // immediately, matching what the backend has already persisted.
@@ -171,16 +180,26 @@ export function useChat() {
           onToolUse: (frame) =>
             setLiveTools((prev) => [
               ...prev,
-              { query: frame.input.query ?? '', sources: null, isError: false },
+              {
+                kind: frame.name === 'query_document_metadata' ? 'sql' : 'search',
+                query: frame.input.sql ?? frame.input.query ?? '',
+                sources: null,
+                sql: null,
+                isError: false,
+              },
             ]),
           onToolResult: (frame) =>
             setLiveTools((prev) => {
               const next = [...prev]
+              // Match the newest still-pending call. Parallel tool calls resolve
+              // in arrival order, and pending-ness is the only ordering signal
+              // the frame carries.
               for (let i = next.length - 1; i >= 0; i--) {
-                if (next[i].sources === null) {
+                if (next[i].sources === null && next[i].sql === null) {
                   next[i] = {
                     ...next[i],
-                    sources: frame.sources,
+                    sources: frame.sources ?? [],
+                    sql: frame.sql ?? null,
                     isError: frame.is_error,
                   }
                   break
@@ -188,6 +207,11 @@ export function useChat() {
               }
               return next
             }),
+          onWebResults: (frame) =>
+            setLiveWeb((prev) => [
+              ...prev,
+              ...frame.results.filter((r) => !prev.some((p) => p.url === r.url)),
+            ]),
           onDone: (frame) => {
             setTruncated(frame.truncated)
             // A tool-using turn persisted several rows (assistant tool call,
@@ -196,21 +220,24 @@ export function useChat() {
             api.listMessages(threadId).then(setMessages).catch(() => {})
             setStreamText('')
             setLiveTools([])
+            setLiveWeb([])
             refreshThreads().catch(() => {})
           },
           onError: (detail) => {
             setError(detail)
             setStreamText('')
             setLiveTools([])
+            setLiveWeb([])
           },
         },
         controller.signal,
+        webSearch,
       )
 
       setStreaming(false)
       abortRef.current = null
     },
-    [activeId, newThread, refreshThreads],
+    [activeId, newThread, refreshThreads, webSearch],
   )
 
   const stop = useCallback(() => abortRef.current?.abort(), [])
@@ -296,7 +323,8 @@ export function useChat() {
 
   return {
     threads, activeId, setActiveId, messages, documents, usage, chatFull,
-    streaming, streamText, liveTools, error, notice, truncated,
+    streaming, streamText, liveTools, liveWeb, error, notice, truncated,
+    webSearch, setWebSearch,
     newThread, removeThread, send, stop, upload, removeDocument,
     reprocess, reprocessAll,
   }
