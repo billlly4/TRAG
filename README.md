@@ -14,10 +14,15 @@ general knowledge.
   text and images. Figures are captioned by a local vision model.
 - **Hybrid retrieval** — dense vectors (pgvector/HNSW) and Postgres full-text
   search fused with Reciprocal Rank Fusion, then reordered by a cross-encoder.
+  Searches can be scoped to a single document, filtered inside the database
+  before ranking.
+- **Prompt caching** — conversation prefixes are cached across turns, which cuts
+  input token cost by roughly half on a multi-turn chat.
 - **Agentic tool routing** — three tools, selected by the model:
   | Tool | Purpose |
   |---|---|
-  | `search_documents` | Semantic search over document contents |
+  | `search_documents` | Semantic search over document contents, optionally scoped to one document |
+  | `count_documents_mentioning` | Exact counts over full document text, via the full-text index |
   | `query_document_metadata` | Read-only SQL over document metadata |
   | `web_search` | Web search, enabled per message by the user |
 - **Source attribution** — per-channel. Passages show file, section, chunk and
@@ -106,6 +111,10 @@ cd frontend && npm install
 
 Apply the migrations in `supabase/migrations/` in order using the Supabase SQL
 editor. Each file ends with a commented verification block.
+
+> `0012` drops and recreates the two retrieval functions rather than replacing
+> them. Adding a parameter to a Postgres function creates an overload, and
+> PostgREST cannot then choose between the two candidates.
 
 > `0010` does not exist. The sequence number was reserved for a change that
 > required no migration.
@@ -201,17 +210,41 @@ Measured per stage on a 16-core machine with an RTX 3060, 20 rerank candidates.
 
 Load tested at 1, 3, 5 and 10 concurrent users with no errors.
 
+Prompt caching, measured over a six-turn conversation. The Messages API is
+stateless, so every turn re-sends the full thread; caching charges 10% for
+re-reads of that prefix.
+
+| | Input tokens |
+|---|---|
+| Total across six turns | 198,631 |
+| Served from cache | 154,028 (77.5%) |
+| Billed equivalent, with caching | 98,060 (−50.6%) |
+
+Caching engages from the second turn. The comparison is made within a single run
+— the agent is non-deterministic, so two runs issue different numbers of model
+calls and a cross-run token difference would measure that rather than caching.
+
 ## Design decisions
 
 - **Metadata filters are applied inside the database function, before ranking.**
   Filtering the top-k afterwards can only discard rows the ranking already
-  selected.
+  selected. Document scoping uses the same path, for the same reason.
+- **Abstention is preserved by document scoping, not bypassed by it.** Scoping a
+  search to one document narrows the candidates the relevance gate judges; it
+  does not lower the bar. A question the document cannot answer still returns
+  "no relevant information".
 - **The text-to-SQL tool is scoped by Postgres grants.** Model-written SQL
   executes inside a function owned by a `nologin` role with `SELECT` on one
   allowlisted view. Access to other tables fails on permissions, not on input
   validation.
 - **Web search is gated by capability.** When the user has not enabled it, the
   tool is not passed to the model, so it cannot be called.
+- **"How many documents mention X" is answered exactly, not hedged.** Counting
+  search results measures the top-k, not the corpus. A dedicated tool counts
+  over the full-text index in the database; its return type carries no content
+  column, so it cannot expose passage text. Instructing the model to hedge was
+  measured at two successes in three, which is why it is a tool and not a
+  prompt.
 - **Retrieval is not implemented with LangChain abstractions.** Hybrid search,
   RRF fusion, reranking and the abstention gate are tuned against the golden
   set and are wrapped as a LangChain tool rather than replaced, so evaluation

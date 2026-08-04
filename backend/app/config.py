@@ -248,6 +248,17 @@ class Settings(BaseSettings):
     # the model cannot fix, so turn this off rather than half-install it.
     sql_tool_enabled: bool = True
 
+    # Exact counts over document CONTENT, via the full-text index. Requires
+    # 0013_content_counts.sql. Without it the tool returns an error the model is
+    # told to route around (search, and report a lower bound), so a missing
+    # migration degrades rather than breaks -- but turn it off rather than leave
+    # every call failing.
+    #
+    # This exists because the alternative was a system-prompt instruction to
+    # hedge, measured at 1-2 successes in 3. A question that can be answered
+    # exactly should not be answered by asking the model to be careful.
+    count_tool_enabled: bool = True
+
     # Web search is requested PER MESSAGE by the user (ChatRequest.web_search).
     # This flag is the operator's off switch on top of that -- when false the
     # tool is never declared no matter what the client asks for.
@@ -266,6 +277,31 @@ class Settings(BaseSettings):
     # Each search is billed on top of tokens, so this bounds what one message can
     # spend without the user seeing it happen.
     web_search_max_uses: int = 5
+
+    # --- Prompt caching ------------------------------------------------------
+
+    # The Messages API is stateless, so every turn re-sends the entire thread at
+    # full input price -- the passages retrieved on turn 1 are still being paid
+    # for on turn 20. It compounds within a turn too: max_tool_turns allows five
+    # model calls per message, each re-sending a prefix that grows as tool
+    # results are appended. Caching charges 10% for re-reads of that prefix.
+    prompt_cache_enabled: bool = True
+
+    # 5m write costs 1.25x base input, 1h costs 2x; both read at 0.1x. 5m is
+    # enough to pay off WITHIN one turn (those calls are seconds apart), but
+    # across user messages it is a coin flip -- a person reads the answer and
+    # thinks before replying, and an expired cache means paying the write
+    # premium again for nothing. Long threads are the problem being solved, so
+    # 1h is the default.
+    prompt_cache_ttl: Literal["5m", "1h"] = "1h"
+
+    # Below Anthropic's minimum cacheable prefix nothing is cached -- the
+    # request is processed normally, at no penalty and no benefit. That floor is
+    # 2048 tokens for Haiku models (1024 for Sonnet/Opus), and this app's system
+    # prompt plus tool schemas sits near it, so early turns in a thread may
+    # cache nothing while later ones do. 0 = let the middleware always tag and
+    # let the API decide; raise it only if the breakpoints prove wasteful.
+    prompt_cache_min_messages: int = 0
 
     # The account backend/evaluation signs in as. Read through Settings rather
     # than os.environ because pydantic-settings loads .env into this object and

@@ -131,6 +131,22 @@ export interface SqlResult {
   error?: string
 }
 
+/**
+ * An exact count of documents containing a term, over the full-text index.
+ *
+ * Distinct from a search: `count` is a TOTAL across every document, where a
+ * search result count only ever measures its own top-k. Shown with the term so
+ * the claim can be checked, and labelled as literal-word matching — "4
+ * documents mention forecasting" is not "4 documents are about forecasting".
+ */
+export interface CountResult {
+  term: string
+  /** Total documents containing the term. null when counting was unavailable. */
+  count: number | null
+  documents?: { filename: string; chunk_matches: number }[]
+  is_error?: boolean
+}
+
 /** A page returned by the server-side web_search tool. */
 export interface WebResult {
   url: string
@@ -146,7 +162,7 @@ export type ChatFrame =
       type: 'tool_use'
       id: string
       name: string
-      input: { query?: string; top_k?: number; sql?: string }
+      input: { query?: string; top_k?: number; sql?: string; term?: string }
     }
   | {
       type: 'tool_result'
@@ -154,6 +170,8 @@ export type ChatFrame =
       sources: Source[]
       /** Present only for query_document_metadata calls. */
       sql?: SqlResult | null
+      /** Present only for count_documents_mentioning calls. */
+      count?: CountResult | null
       is_error: boolean
     }
   | {
@@ -211,6 +229,14 @@ export function toolSqlResults(content: ContentBlock[]): SqlResult[] {
     .filter((b) => b.type === 'tool_result')
     .map((b) => (b as { sql?: SqlResult | null }).sql)
     .filter((s): s is SqlResult => !!s && typeof s.sql === 'string')
+}
+
+/** Exact content counts carried by a message's tool_result blocks. */
+export function toolCounts(content: ContentBlock[]): CountResult[] {
+  return content
+    .filter((b) => b.type === 'tool_result')
+    .map((b) => (b as { count?: CountResult | null }).count)
+    .filter((c): c is CountResult => !!c && typeof c.term === 'string')
 }
 
 /**

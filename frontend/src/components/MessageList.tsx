@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react'
 
 import type { LiveTool } from '../hooks/useChat'
-import type { Message, Source, SqlResult, WebResult } from '../lib/types'
+import type { CountResult, Message, Source, SqlResult, WebResult } from '../lib/types'
 import {
   blocksToCitations,
   blocksToText,
   isToolResultMessage,
+  toolCounts,
   toolQueries,
   toolSources,
   toolSqlResults,
@@ -127,6 +128,51 @@ function SqlBlock({ result }: { result: SqlResult }) {
 }
 
 /**
+ * An exact count over document contents.
+ *
+ * Rendered as its own thing rather than as a source list, because it is a
+ * different kind of claim: a total across every document, not a ranked sample.
+ * The literal-matching caveat is shown rather than left to the prose — "4
+ * documents mention forecasting" reads as "4 documents are about forecasting",
+ * and only one of those is what was measured.
+ */
+function CountBlock({ result }: { result: CountResult }) {
+  if (result.count === null) {
+    return (
+      <p className="my-1 text-xs text-red-500">
+        Could not count documents mentioning &ldquo;{result.term}&rdquo;.
+      </p>
+    )
+  }
+  const docs = result.documents ?? []
+  return (
+    <details className="my-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <summary className="cursor-pointer select-none hover:text-zinc-700 dark:hover:text-zinc-200">
+        🔢 Counted <span className="italic">&ldquo;{result.term}&rdquo;</span> across all
+        documents — {result.count} of them
+      </summary>
+      {docs.length > 0 && (
+        <ol className="mt-1 space-y-0.5 border-l-2 border-emerald-300 pl-3 dark:border-emerald-800">
+          {docs.map((d, i) => (
+            <li key={i}>
+              <span className="font-medium">{d.filename}</span>
+              <span className="text-zinc-400">
+                {' · '}
+                {d.chunk_matches} passage{d.chunk_matches === 1 ? '' : 's'}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+      <p className="mt-1 text-zinc-400">
+        Exact total over every document&rsquo;s full text. Matches the word
+        literally — a document covering the subject in other words is not counted.
+      </p>
+    </details>
+  )
+}
+
+/**
  * Pages returned by web search.
  *
  * Rendered distinctly from document passages on purpose: once an answer can
@@ -236,15 +282,22 @@ export function MessageList({
         // kinds when the model ran a search and a metadata query together.
         if (m.role === 'user' && isToolResultMessage(m)) {
           const sqls = toolSqlResults(m.content)
+          const counts = toolCounts(m.content)
           const sources = toolSources(m.content)
+          // "No relevant passages found" is only true of a SEARCH that found
+          // none. A metadata query or an exact count legitimately carries no
+          // passages, and printing it over the top of them contradicts a
+          // complete answer.
+          const showSources = sources.length > 0 || (sqls.length === 0 && counts.length === 0)
           return (
             <div key={m.id}>
               {sqls.map((s, i) => (
                 <SqlBlock key={i} result={s} />
               ))}
-              {(sources.length > 0 || sqls.length === 0) && (
-                <SourceList sources={sources} />
-              )}
+              {counts.map((c, i) => (
+                <CountBlock key={i} result={c} />
+              ))}
+              {showSources && <SourceList sources={sources} />}
             </div>
           )
         }
@@ -267,7 +320,22 @@ export function MessageList({
       {/* Live tool activity for the in-flight turn */}
       {streaming &&
         liveTools.map((t, i) => {
-          const pending = t.sources === null && t.sql === null
+          const pending = t.sources === null && t.sql === null && t.count === null
+          if (t.kind === 'count') {
+            return (
+              <div key={i}>
+                {pending ? (
+                  <p className="my-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500 align-middle" />
+                    Counting documents mentioning{' '}
+                    <span className="italic">&ldquo;{t.query}&rdquo;</span>…
+                  </p>
+                ) : t.count ? (
+                  <CountBlock result={t.count} />
+                ) : null}
+              </div>
+            )
+          }
           if (t.kind === 'sql') {
             return (
               <div key={i}>

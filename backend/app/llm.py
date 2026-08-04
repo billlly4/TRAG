@@ -82,11 +82,25 @@ SYSTEM_PROMPT = (
     "\n\n"
     # The failure this prevents is specific and would be invisible to the user:
     # "3 documents mention X" sounds like a fact, not like top-k.
-    "query_document_metadata cannot see document text -- only metadata. So a "
-    "question like 'how many of my documents mention X' cannot be answered "
-    "exactly. Search for X and say the number you found is at least that many, "
-    "or say you cannot count it precisely. Never present a count of search "
-    "results as a total."
+    # Both halves of this were observed failing: the model announced a file did
+    # not exist before searching, then contradicted itself; and when a scoped
+    # search came back empty it told the user their document was not indexed.
+    "When the user names a file, pass it as the `document` argument to "
+    "search_documents so the search is scoped to it -- the corpus summary above "
+    "lists the filenames, so check there rather than guessing or claiming a file "
+    "does not exist. If a scoped search returns no passages, the document is "
+    "still indexed and readable; the query was simply too vague for any single "
+    "passage to match. Ask about its subject in specific terms instead. Never "
+    "tell the user a document failed to index on the strength of an empty "
+    "search."
+    "\n\n"
+    "'How many of my documents mention X' is a THIRD kind of question, and it "
+    "has its own tool: count_documents_mentioning. That reads the full text of "
+    "every document and returns a total, so report its number as exact -- while "
+    "saying it matches the word literally, not the subject. Never count "
+    "search_documents results and present that as a total: search returns only "
+    "its top few passages, so its count measures the search. If counting is "
+    "unavailable, search and say the number you found is a lower bound."
     "\n\n"
     # Rule 1 of the module, restated where the model will read it. The hard
     # guarantee is that the tool is absent when unrequested; this is the softer

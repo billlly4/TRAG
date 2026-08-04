@@ -3,18 +3,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from '../lib/api'
 import { supabase } from '../lib/supabase'
 import type {
-  DocumentMeta, Message, Source, SqlResult, Thread, Usage, WebResult,
+  CountResult, DocumentMeta, Message, Source, SqlResult, Thread, Usage, WebResult,
 } from '../lib/types'
 
 /** A tool call the assistant is running (or has run) during the live turn. */
 export interface LiveTool {
   /** Which channel ran — the UI renders each differently. */
-  kind: 'search' | 'sql'
-  /** The search query, or the SQL for a metadata query. */
+  kind: 'search' | 'sql' | 'count'
+  /** The search query, the SQL, or the term being counted. */
   query: string
   /** null while the call is still executing */
   sources: Source[] | null
   sql: SqlResult | null
+  count: CountResult | null
   isError: boolean
 }
 
@@ -181,10 +182,16 @@ export function useChat() {
             setLiveTools((prev) => [
               ...prev,
               {
-                kind: frame.name === 'query_document_metadata' ? 'sql' : 'search',
-                query: frame.input.sql ?? frame.input.query ?? '',
+                kind:
+                  frame.name === 'query_document_metadata'
+                    ? 'sql'
+                    : frame.name === 'count_documents_mentioning'
+                      ? 'count'
+                      : 'search',
+                query: frame.input.sql ?? frame.input.term ?? frame.input.query ?? '',
                 sources: null,
                 sql: null,
+                count: null,
                 isError: false,
               },
             ]),
@@ -195,11 +202,13 @@ export function useChat() {
               // in arrival order, and pending-ness is the only ordering signal
               // the frame carries.
               for (let i = next.length - 1; i >= 0; i--) {
-                if (next[i].sources === null && next[i].sql === null) {
+                const t = next[i]
+                if (t.sources === null && t.sql === null && t.count === null) {
                   next[i] = {
-                    ...next[i],
+                    ...t,
                     sources: frame.sources ?? [],
                     sql: frame.sql ?? null,
+                    count: frame.count ?? null,
                     isError: frame.is_error,
                   }
                   break

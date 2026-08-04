@@ -25,14 +25,19 @@ def corpus_summary(db) -> str:
     Without this the model invents plausible filter values -- doc_type
     "invoice", source_org "Acme Corp" -- that match nothing, and then reports
     that the corpus has no answer. Injected into the system prompt rather than
-    exposed as a tool: a tool would cost an extra round trip on every question,
-    and Module 2 already measured that there is no prompt cache to protect
-    (cache_read_input_tokens is 0 at this prompt size).
+    exposed as a tool: a tool would cost an extra round trip on every question.
+
+    That injection now lands inside the CACHED prefix, so this text is part of
+    what prompt caching is preserving between turns. It is recomputed per
+    request, which means a document finishing ingestion mid-conversation
+    changes the system prompt and invalidates the cache for that thread. That
+    is correct -- the model has to see the new corpus -- and it is the reason
+    cache hit rates dip while an upload is processing rather than a bug.
     """
     try:
         res = (
             db.table("documents")
-            .select("doc_type,source_org,topics,published_year")
+            .select("filename,doc_type,source_org,topics,published_year")
             .eq("status", "ready")
             .execute()
         )
@@ -52,6 +57,18 @@ def corpus_summary(db) -> str:
     years = sorted({r["published_year"] for r in rows if r.get("published_year")})
 
     lines = [f"\n\nThe user's corpus: {len(rows)} document(s)."]
+
+    # Filenames, because without them the model cannot know a file exists until
+    # it has spent a metadata query finding out -- and observed worse, it opens
+    # by telling the user they have no such file, then contradicts itself one
+    # tool call later. Naming them also lets it pass `document=` on the first
+    # search rather than guessing. Capped: past a few dozen this stops being a
+    # summary, and the metadata tool is the right instrument for a large corpus.
+    if files := distinct("filename"):
+        shown = ", ".join(files)
+        more = len(rows) - len(files)
+        lines.append(f"Files: {shown}{f' (+{more} more)' if more > 0 else ''}.")
+
     if types := distinct("doc_type"):
         lines.append(f"Types: {', '.join(types)}.")
     if orgs := distinct("source_org"):
@@ -257,6 +274,11 @@ def chat(
                             art = m.artifact if isinstance(m.artifact, dict) else {}
                             sources = art.get("sources") or []
                             sql_meta = art.get("sql")
+                            # An exact content count. Carried separately from
+                            # `sources` because it has none -- rendering it
+                            # through the passage list would show "no relevant
+                            # passages found" over the top of a complete answer.
+                            count = art if "count" in art else None
                             is_error = bool(art.get("is_error")) or m.status == "error"
                             yield _sse(
                                 {
@@ -264,6 +286,7 @@ def chat(
                                     "tool_use_id": m.tool_call_id,
                                     "sources": sources,
                                     "sql": sql_meta,
+                                    "count": count,
                                     "is_error": is_error,
                                 }
                             )
@@ -275,6 +298,8 @@ def chat(
                             }
                             if sql_meta is not None:
                                 stored["sql"] = sql_meta
+                            if count is not None:
+                                stored["count"] = count
                             if is_error:
                                 stored["is_error"] = True
                             persist("user", [stored])

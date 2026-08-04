@@ -13,3 +13,6 @@ backend/evaluation/
 node_modules/
 dist/
 .cl
+
+#supabase queries
+supabase/

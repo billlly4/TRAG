@@ -77,11 +77,17 @@ class Filters:
     year_min: int | None = None
     year_max: int | None = None
 
+    # Restrict the search to specific documents. Unlike the metadata filters
+    # above this one is resolved from a name by the caller, not chosen by the
+    # model -- see `resolve_document` in agent.py.
+    document_ids: list[str] = field(default_factory=list)
+
     def active(self) -> bool:
         return bool(
             self.doc_types
             or self.source_orgs
             or self.topics
+            or self.document_ids
             or self.year_min is not None
             or self.year_max is not None
         )
@@ -97,6 +103,8 @@ class Filters:
             parts.append(f"topics={'/'.join(self.topics)}")
         if self.year_min is not None or self.year_max is not None:
             parts.append(f"years={self.year_min or '…'}–{self.year_max or '…'}")
+        if self.document_ids:
+            parts.append(f"documents={len(self.document_ids)}")
         return ", ".join(parts) or "none"
 
     def to_rpc(self) -> dict:
@@ -109,6 +117,7 @@ class Filters:
             "filter_topics": self.topics or None,
             "filter_year_min": self.year_min,
             "filter_year_max": self.year_max,
+            "filter_document_ids": self.document_ids or None,
         }
 
 
@@ -196,6 +205,27 @@ def search_keyword(
         query, filters.describe(), len(hits),
     )
     return hits
+
+
+def count_matching(db: Client, term: str, max_rows: int = 200) -> list[dict]:
+    """Documents whose text contains `term`, with per-document match counts.
+
+    Counting happens in the database, not here, and that is the whole point.
+    Aggregating in Python would mean fetching one row per matching chunk
+    through PostgREST, whose default row cap would silently truncate on a large
+    corpus -- reproducing the exact bug this exists to fix, but harder to see.
+
+    LEXICAL, not semantic. This counts documents containing the WORD; a
+    document discussing the subject in different words is not counted. Callers
+    must say so, or "4 documents mention forecasting" gets read as "4 documents
+    are about forecasting".
+    """
+    res = db.rpc(
+        "count_documents_matching", {"search_term": term, "max_rows": max_rows}
+    ).execute()
+    rows = res.data if isinstance(res.data, list) else []
+    log.info("count term=%r documents=%d", term, len(rows))
+    return rows
 
 
 def rrf_fuse(rankings: list[list[Hit]], k: int = 60) -> list[Hit]:
