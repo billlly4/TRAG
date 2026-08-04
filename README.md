@@ -181,21 +181,48 @@ Ollama must be running. The application is served at http://localhost:5173.
 
 ## Evaluation
 
-Retrieval is scored against a golden question set. The harness makes no LLM
-calls and is used as the regression test for retrieval changes.
+Two harnesses read the same golden question set.
+
+**Retrieval** — scored by calling the search pipeline directly. No LLM calls;
+this is the regression test for retrieval changes.
 
 ```bash
 uv run python -m backend.evaluation.run --channels vector,keyword,rrf,reranked
 ```
 
-Current results:
+| Channel | Hit rate | Doc hit | MRR | nDCG | Abstain |
+|---|---|---|---|---|---|
+| Vector only | 77.8% | 87.5% | 0.875 | 0.856 | 0% |
+| Keyword only | 66.7% | 62.5% | 0.625 | 0.625 | 100% |
+| RRF fusion | 88.9% | **100%** | **1.000** | 0.981 | 0% |
+| RRF + reranked | **100%** | 100% | 1.000 | 0.981 | **100%** |
 
-| Channel | Hit rate | MRR | nDCG |
-|---|---|---|---|
-| Vector only | 85.7% | 0.857 | 0.857 |
-| Keyword only | 71.4% | 0.714 | 0.714 |
-| RRF fusion | 100% | 1.000 | 1.000 |
-| RRF + reranked | 100% | 1.000 | 1.000 |
+Hit rate counts abstention as the correct outcome on a question the corpus
+cannot answer; doc hit rate covers answerable questions only. The columns
+separate because they measure different things: RRF ranks perfectly and still
+scores 88.9%, because rank fusion produces no meaningful score scale to
+threshold on, so it returns passages for a question it should decline.
+Declining is what the cross-encoder adds on top of ranking.
+
+nDCG at 0.981 against an MRR of 1.000 comes from the one multi-document
+question — the first expected document ranks first, the second ranks below
+ideal. On single-document questions the two metrics move together and nDCG adds
+nothing.
+
+**Answers** — drives the real agent and asserts what retrieval metrics cannot
+see: which tool it selected, whether a search naming one document was scoped to
+it, whether a passage came from the wrong file, and whether the answer names a
+document no tool returned.
+
+```bash
+uv run python -m backend.evaluation.answers            # 10 questions x 3 runs
+uv run python -m backend.evaluation.answers --langsmith
+```
+
+Every question runs three times and the report shows `2/3` rather than a mean —
+the agent is non-deterministic, and a partial pass is more dangerous than a
+clean failure because it looks like success on a lucky run. Assertions are
+mechanical; no model grades another model's output.
 
 ## Performance
 

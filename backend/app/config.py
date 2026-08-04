@@ -303,6 +303,13 @@ class Settings(BaseSettings):
     # let the API decide; raise it only if the breakpoints prove wasteful.
     prompt_cache_min_messages: int = 0
 
+    # Runs per question in the answer-level suite. Three, not one, because a
+    # single sample is exactly what recorded "the count hedge works" in
+    # PROGRESS.md -- and three samples are what showed it firing 2 times in 3.
+    # The agent is non-deterministic; a suite that cannot see that will read a
+    # lucky run as a pass.
+    answer_eval_reps: int = 3
+
     # The account backend/evaluation signs in as. Read through Settings rather
     # than os.environ because pydantic-settings loads .env into this object and
     # does NOT export it to the process environment -- the same trap llm.py
