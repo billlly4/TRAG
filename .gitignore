@@ -16,4 +16,4 @@ dist/
 .cl
 
 #supabase queries
-supabase/
+#supabase/

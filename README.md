@@ -28,9 +28,6 @@ similarity cannot tell a genuine question from gibberish — both score around
 
 > Nonsense query: 0.483 · Real question: 0.500 — no threshold separates them.
 
-The full reasoning and every measurement behind the defaults lives in
-[`findings.md`](findings.md).
-
 ---
 
 ## What it can do
