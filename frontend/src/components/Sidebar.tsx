@@ -4,11 +4,8 @@ import { ACCEPT_ATTRIBUTE } from '../lib/formats'
 import type { DocumentMeta, Thread, Usage } from '../lib/types'
 import { Banner, Button, cx } from './ui'
 
-/**
- * Ingestion status badge. The transitions arrive over Supabase Realtime as the
- * backend walks pending -> extracting -> chunking -> embedding -> ready, so
- * this advances live without a refresh.
- */
+// backend walks pending -> extracting -> chunking -> embedding -> ready, so
+
 function StatusBadge({ doc }: { doc: DocumentMeta }) {
   if (doc.status === 'ready') {
     return (
@@ -51,15 +48,6 @@ function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
-/**
- * Quota meters. Shown so the limits are discoverable BEFORE they are hit --
- * a refusal is far less annoying when you could already see it coming and know
- * what to delete.
- *
- * Storage is the Supabase Storage bucket only: the original uploaded files.
- * Chats and chunks live in Postgres, which is a separate resource, bounded by
- * the per-chat message limit rather than by this number.
- */
 function UsageMeters({ usage }: { usage: Usage }) {
   const rows = [
     {
@@ -100,6 +88,8 @@ function UsageMeters({ usage }: { usage: Usage }) {
 }
 
 export function Sidebar({
+  open,
+  onClose,
   threads,
   activeId,
   documents,
@@ -115,6 +105,8 @@ export function Sidebar({
   onReprocessAll,
   onSignOut,
 }: {
+  open: boolean
+  onClose: () => void
   threads: Thread[]
   activeId: string | null
   documents: DocumentMeta[]
@@ -144,11 +136,35 @@ export function Sidebar({
   }
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="p-3">
-        <Button className="w-full" onClick={onNew}>
+    <aside
+      aria-hidden={!open}
+      className={cx(
+        'fixed inset-y-0 left-0 z-40 flex w-72 max-w-[85vw] flex-col',
+        'border-r border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950',
+        'transition-transform duration-200',
+        open ? 'translate-x-0' : '-translate-x-full',
+      )}
+    >
+      <div className="flex items-center gap-2 p-3">
+        <Button className="flex-1" onClick={onNew}>
           New chat
         </Button>
+        {/* Phones only: the desktop toggle lives in the header, but a drawer
+            needs a close affordance inside itself. */}
+        <button
+          onClick={onClose}
+          aria-label="Close sidebar"
+          className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-200/70 md:hidden dark:hover:bg-zinc-800"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M6 6l12 12M18 6L6 18"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2">
@@ -177,7 +193,7 @@ export function Sidebar({
             <button
               onClick={() => onDeleteThread(t.id)}
               title="Delete thread"
-              className="px-2 text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-red-600"
+              className="px-2 text-zinc-400 opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:text-red-600"
             >
               ×
             </button>
@@ -216,14 +232,6 @@ export function Sidebar({
         )}
         {documents.map((d) => {
           const terminal = d.status === 'ready' || d.status === 'failed'
-          // Terminal + stale -> the normal "config changed" re-process.
-          // Non-terminal -> recovery. An ingest orphaned by a backend crash or
-          // restart sits at pending/extracting forever with nothing working on
-          // it, and looks identical to one still in progress: there is no
-          // status-changed timestamp to tell them apart. So the button is
-          // offered for every in-flight document and the tooltip says what it
-          // is for. Clicking it on a genuinely running ingest just restarts
-          // that ingest.
           const canReprocess = terminal ? d.stale : true
           return (
             <div key={d.id} className="group flex items-center rounded-lg px-2.5 py-1.5">
@@ -249,7 +257,7 @@ export function Sidebar({
                       ? 'Re-process under current settings'
                       : 'Stuck? Re-process from the stored file'
                   }
-                  className="px-1 text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-indigo-600"
+                  className="px-1 text-zinc-400 opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:text-indigo-600"
                 >
                   ↻
                 </button>
@@ -257,7 +265,7 @@ export function Sidebar({
               <button
                 onClick={() => onDeleteDocument(d.id)}
                 title="Delete document"
-                className="px-1 text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-red-600"
+                className="px-1 text-zinc-400 opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:text-red-600"
               >
                 ×
               </button>

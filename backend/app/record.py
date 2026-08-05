@@ -20,12 +20,6 @@ from .config import get_settings
 from .extract import VLM_PROMPT
 from .metadata import prompt_fingerprint
 
-# Bump manually when extractor or chunker CODE changes in a way that alters
-# output (a bugfix that changes chunk boundaries, a different markdown export).
-# Settings changes are picked up automatically below; code changes are not.
-#
-# 2: Module 4 -- the chunker now tracks section headings and chunk boundaries
-#    shifted with it, so every existing chunk was built by different code.
 PIPELINE_VERSION = 2
 
 

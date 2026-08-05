@@ -3,6 +3,20 @@ import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { Banner, Button, Input } from './ui'
 
+/**
+ * Whether to offer registration at all.
+ *
+ * On the deployed instance Supabase has signups disabled, so the form would
+ * take an email and a password and then return "Signups not allowed for this
+ * instance" -- accurate, but it invites the attempt first. Accounts are created
+ * from the Supabase dashboard instead.
+ *
+ * This is presentation only. The real control is the Supabase setting: hiding a
+ * button does not stop anyone calling `signUp` directly, and it is not meant to.
+ * Defaults to ON so local development is unaffected.
+ */
+const ALLOW_SIGNUP = import.meta.env.VITE_ALLOW_SIGNUP !== 'false'
+
 export function AuthForm() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [email, setEmail] = useState('')
@@ -61,18 +75,24 @@ export function AuthForm() {
           {busy ? 'Working…' : mode === 'signup' ? 'Sign up' : 'Sign in'}
         </Button>
 
-        <button
-          type="button"
-          onClick={() => {
-            setMode(mode === 'signup' ? 'signin' : 'signup')
-            setError(null)
-          }}
-          className="w-full text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-        >
-          {mode === 'signup'
-            ? 'Already have an account? Sign in'
-            : 'Need an account? Sign up'}
-        </button>
+        {ALLOW_SIGNUP ? (
+          <button
+            type="button"
+            onClick={() => {
+              setMode(mode === 'signup' ? 'signin' : 'signup')
+              setError(null)
+            }}
+            className="w-full text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+          >
+            {mode === 'signup'
+              ? 'Already have an account? Sign in'
+              : 'Need an account? Sign up'}
+          </button>
+        ) : (
+          <p className="text-center text-sm text-zinc-500">
+            Accounts are created by invitation.
+          </p>
+        )}
       </form>
     </div>
   )

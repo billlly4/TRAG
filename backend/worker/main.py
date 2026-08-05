@@ -33,10 +33,7 @@ logging.basicConfig(
     format="%(levelname)-8s %(name)s: %(message)s",
 )
 
-# This loop polls the queue every few seconds, so at INFO httpx turns the log
-# into a wall of "claim_ingest_job 200 OK" heartbeats and a real ingestion
-# failure scrolls past unnoticed between them. Warnings and errors still
-# surface -- this hides the successful polls, not the problems.
+# This loop polls the queue every few seconds
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 log = logging.getLogger("worker")

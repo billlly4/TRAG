@@ -27,21 +27,6 @@ class EmbeddingError(RuntimeError):
 
 
 def _get_client(base_url: str) -> httpx.Client:
-    """One pooled client for the whole process, shared across threads.
-
-    A client per call meant a fresh TCP connection every time. Measured, a
-    reused connection answers in under a millisecond where a new one cost
-    seconds, so the pool is most of the win here -- the address change in
-    `config.py` only removes the resolution penalty.
-
-    Safe to share where the Supabase client is emphatically NOT: this client
-    carries no credentials and no per-user state. Ollama is unauthenticated and
-    bound to loopback, so nothing here identifies a caller and two users' calls
-    cannot borrow each other's identity. Do not add Authorization headers to it.
-
-    httpx.Client is documented as thread-safe; the lock guards construction so
-    two threads cannot each build one and leak the loser's sockets.
-    """
     global _client, _client_url
     with _client_lock:
         if _client is None or _client_url != base_url:

@@ -125,14 +125,6 @@ def extract_text(data: bytes, filename: str, mime: str | None = None) -> str:
 
 
 def _warn_on_config_drift(remote_fingerprint: str | None) -> None:
-    """Shout if the extractor is running a different configuration than we think.
-
-    config_hash is computed HERE, from this process's settings, but extraction
-    happens over there. If the two disagree -- a different DESCRIBE_PICTURES, a
-    different VLM model -- then config_hash describes a pipeline that never ran,
-    and the record manager's whole premise quietly stops holding. Nothing else
-    in the system can notice this, so it is checked on every extraction.
-    """
     if not remote_fingerprint:
         return
     from .record import local_extraction_fingerprint

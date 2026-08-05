@@ -1,15 +1,3 @@
-"""The system prompt, and the rules for replaying stored blocks to the API.
-
-The Anthropic client used to live here, wrapped by LangSmith's
-`wrap_anthropic`. Both are gone: the app reaches Claude through ChatAnthropic
-now, and LangChain traces to LangSmith natively.
-
-That removal took the LangSmith environment export with it -- it only ran inside
-`get_client()`, so when nothing called that any more, tracing stopped without an
-error to say so. The export now lives in `config.get_settings`, where every
-entry point reaches it just by reading settings.
-"""
-
 # Fields the Messages API accepts on *input* for each block type. The SDK's
 # response models carry extra fields that are not valid to send back -- notably
 # `parsed_output`, which streamed text blocks include and non-streamed ones do
@@ -26,24 +14,6 @@ _API_BLOCK_FIELDS: dict[str, set[str]] = {
 
 
 def sanitize_for_api(content: list[dict]) -> list[dict]:
-    """Strip response-only fields from stored blocks before replaying them.
-
-    We persist the full dump because the UI needs it; this narrows it back to
-    what the API accepts as input.
-
-    Citation *spans* on assistant text blocks are dropped entirely rather than
-    cleaned field-by-field. They are display metadata -- the model does not need
-    its own previous citations to continue, since the document is still in
-    context -- and trying to round-trip them fails three different ways:
-    `file_id` is not accepted, `document_title` is required-but-nullable, and
-    char_location spans are rejected outright when the document is referenced
-    by file id. Keeping them in the database and dropping them here gets the UI
-    what it needs without fighting the input schema.
-
-    The `citations` key on a *document* block is different -- it is the config
-    dict {"enabled": true}, and it must survive or citations stop being
-    generated at all.
-    """
     out: list[dict] = []
     for block in content:
         allowed = _API_BLOCK_FIELDS.get(block.get("type"))

@@ -8,10 +8,6 @@ class CurrentUser(BaseModel):
 
     id: str
     email: str | None = None
-
-    # The caller's raw access token. Forwarded to PostgREST so Postgres
-    # evaluates RLS as this user rather than us re-implementing authorisation
-    # in application code.
     token: str = Field(repr=False)
 
 
@@ -29,10 +25,6 @@ class UsageResponse(BaseModel):
 
     threads_used: int
     threads_limit: int
-
-    # Storage is the Supabase bucket only: the original uploaded files. Chunks,
-    # embeddings and chat messages live in Postgres and are a separate resource,
-    # bounded by the per-chat message limit rather than by this number.
     storage_used_bytes: int
     storage_limit_bytes: int
 
@@ -100,10 +92,6 @@ class DocumentOut(BaseModel):
     status: str
     error: str | None = None
     chunk_count: int | None = None
-
-    # True when the stored chunks were built under a different extraction
-    # config than the current one (or under none at all -- legacy rows).
-    # Computed server-side against record.config_hash(); never stored.
     stale: bool = False
 
     # Extracted at ingest (backend/app/metadata.py). All optional: a document

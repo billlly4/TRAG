@@ -8,8 +8,7 @@ from .auth import verify_token
 from .config import Settings, get_settings
 from .schemas import CurrentUser
 
-# auto_error=False so a missing header produces our own 401 with a
-# WWW-Authenticate challenge rather than FastAPI's bare 403.
+# auto_error=False so a missing header produces our own 401
 _bearer = HTTPBearer(auto_error=False)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]

@@ -2,11 +2,7 @@ import { useState } from 'react'
 
 import { Button } from './ui'
 
-/**
- * No document picker here any more. Module 1 attached whole documents to a
- * message by hand; retrieval is now automatic -- the assistant searches
- * uploaded documents itself when the question calls for it.
- */
+
 export function Composer({
   streaming,
   full,
@@ -16,14 +12,7 @@ export function Composer({
   onStop,
 }: {
   streaming: boolean
-  /** The chat hit its message limit. Readable, but no longer writable. */
   full?: boolean
-  /**
-   * Whether this message may use web search. Off by default and deliberately
-   * per-message rather than a sticky setting: turning the web on is a decision
-   * about one question, and a toggle left on last week would silently change
-   * where later answers come from.
-   */
   webSearch: boolean
   onWebSearchChange: (value: boolean) => void
   onSend: (text: string) => void
@@ -42,7 +31,7 @@ export function Composer({
   return (
     <form
       onSubmit={submit}
-      className="border-t border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
+      className="border-t border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900"
     >
       {/* Said before the send fails, not after. The chat stays fully readable
           -- only new messages are refused. */}
@@ -92,7 +81,10 @@ export function Composer({
         />
         <span>
           Search the web for this message
-          <span className="ml-1 text-zinc-400 dark:text-zinc-500">
+          {/* The rationale is worth saying, but on a phone it wraps to three
+              lines above the keyboard. The checkbox label alone still carries
+              the meaning. */}
+          <span className="ml-1 hidden text-zinc-400 sm:inline dark:text-zinc-500">
             — off, answers come only from your documents
           </span>
         </span>

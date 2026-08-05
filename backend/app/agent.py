@@ -1,29 +1,3 @@
-"""The agent, as a LangGraph graph.
-
-Replaces the hand-rolled `for turn in range(max_tool_turns)` loop that used to
-live in `routers/chat.py`. What that loop did by hand -- call the model, notice
-`stop_reason == "tool_use"`, dispatch, append results, repeat -- `create_agent`
-does as a compiled graph, which is what makes Module 8's sub-agents tractable.
-
-**Retrieval is untouched.** `hybrid_search`, RRF fusion, the cross-encoder and
-the abstention gate were each tuned against the golden set, and LangChain's
-equivalents (`EnsembleRetriever`, `CrossEncoderReranker`) weight and threshold
-differently. Wrapping the measured code in a `@tool` keeps the golden set a
-valid regression test for this rewrite; swapping the internals would have made
-it measure something else.
-
-Two properties from the old loop that had to survive the port, because both are
-guarantees rather than conveniences:
-
-  * **Capability gating.** The web-search tool is absent from the tool list
-    unless the user asked for it, so the model *cannot* reach the web. Tools are
-    therefore built per request, not once at import.
-  * **Per-channel attribution.** Each tool returns `(text, artifact)` via
-    `response_format="content_and_artifact"`; the artifact rides on
-    `ToolMessage.artifact` and becomes the `sources` / `sql` the UI renders. The
-    model sees only the text.
-"""
-
 import logging
 from typing import Any
 
@@ -139,10 +113,6 @@ def resolve_document(db: Client, name: str) -> tuple[list[dict], str | None]:
             if predicate(folded, (r.get("filename") or "").casefold())
             or predicate(folded, (r.get("title") or "").casefold())
         ]
-
-    # Exact name before substring, so "chapter2" cannot be swallowed by a file
-    # called "chapter2-and-chapter3". Several rows sharing a name is not
-    # ambiguity -- it is the same document twice, so scope to all of them.
     if hits := matches(lambda needle, field: field == needle):
         return hits, None
 
@@ -214,9 +184,6 @@ def build_tools(settings: Settings, db: Client, *, web_search: bool) -> list[Any
         if document:
             scoped, resolve_error = resolve_document(db, document)
             if resolve_error:
-                # Returned rather than searched-anyway. Silently widening a
-                # scoped search back to the corpus is how a chapter 2 passage
-                # ends up cited in an answer about chapter 7.
                 return resolve_error, {"sources": [], "is_error": True}
         document_ids = [r["id"] for r in scoped]
 
@@ -231,8 +198,7 @@ def build_tools(settings: Settings, db: Client, *, web_search: bool) -> list[Any
         k = top_k if isinstance(top_k, int) else None
 
         try:
-            # Same call either way, so switching retrieval strategy stays
-            # invisible to the model.
+
             hits = (
                 hybrid_search(db, q, k, filters)
                 if settings.retrieval_hybrid
@@ -242,18 +208,6 @@ def build_tools(settings: Settings, db: Client, *, web_search: bool) -> list[Any
             return f"Search unavailable: {exc}", {"sources": [], "is_error": True}
 
         if not hits:
-            # Two opposite failures used to share one message, and conflating
-            # them is what made the model tell a user their file "may not have
-            # been properly indexed":
-            #
-            #   * A METADATA filter can match no documents at all (doc_type
-            #     "invoice" in a corpus with none). "Retry without the filters"
-            #     is right.
-            #   * A DOCUMENT scope always matches -- the document was resolved
-            #     by name. So an empty result means the relevance gate rejected
-            #     every passage, and "retry without the filters" is actively
-            #     harmful: it pulls in other documents, which is the
-            #     cross-document attribution bug 0012 exists to prevent.
             if len(scoped) == 1:
                 doc = scoped[0]
                 outline = document_outline(db, doc["id"])
@@ -265,18 +219,12 @@ def build_tools(settings: Settings, db: Client, *, web_search: bool) -> list[Any
                     f"rather than asking what it contains."
                 ]
                 if outline:
-                    # Headings, not content -- said plainly, because the model
-                    # must not present a table of contents as though it had read
-                    # the sections underneath it.
                     parts.append(
                         f"Its section headings, for orientation only (these are "
                         f"headings, NOT the text under them): {outline}"
                     )
                 return "\n\n".join(parts), {"sources": []}
 
-            # Naming the filters matters: told only "nothing found", the model
-            # concludes the corpus cannot answer and stops. Told the filters
-            # matched nothing, it retries without them.
             if filters.active():
                 return (
                     f"No passages matched the filters ({filters.describe()}). "
@@ -302,10 +250,7 @@ def build_tools(settings: Settings, db: Client, *, web_search: bool) -> list[Any
                     "section": h.section,
                     "ordinal": h.ordinal,
                     "similarity": round(h.similarity, 3),
-                    # The score the list is actually ORDERED by. Cosine alone
-                    # next to a reranked ranking shows numbers that contradict
-                    # the order, and a keyword-only hit reads as 0.000 --
-                    # looking irrelevant when it was matched exactly.
+
                     "rerank_score": (
                         round(h.rerank_score, 2) if h.rerank_score is not None else None
                     ),
@@ -399,9 +344,6 @@ def build_tools(settings: Settings, db: Client, *, web_search: bool) -> list[Any
             meta,
         )
 
-    # The docstring is the tool description the model sees, and it has to carry
-    # the exact column list -- without it the model invents names and every call
-    # comes back as an undefined-column error.
     query_document_metadata.description += f"\n\n{SQL_SCHEMA}"
 
     tools: list[Any] = []
@@ -441,9 +383,6 @@ def build_agent(settings: Settings, db: Client, system_prompt: str, *, web_searc
         streaming=True,
     )
     middleware: list[Any] = [
-        # The old loop bounded itself with `for turn in range(max_tool_turns)`.
-        # This is the same bound, declared instead of written: it stops a
-        # model that keeps calling tools from looping forever.
         ModelCallLimitMiddleware(run_limit=settings.max_tool_turns, exit_behavior="end")
     ]
 
@@ -475,8 +414,6 @@ def build_agent(settings: Settings, db: Client, system_prompt: str, *, web_searc
     )
 
 
-# Tool names whose results carry document sources rather than SQL metadata.
-# Used by the SSE layer to decide which frame shape to emit.
 SOURCE_TOOLS = {SEARCH_TOOL_NAME}
 SQL_TOOLS = {SQL_TOOL_NAME}
 
@@ -496,9 +433,6 @@ def to_lc_messages(rows: list[dict]) -> list[BaseMessage]:
     """
     out: list[BaseMessage] = []
     for m in rows:
-        # Module 1 turns carry `document` blocks referencing Anthropic's Files
-        # API, which this app no longer uses. Dropping them keeps old threads
-        # replayable; the text of those turns survives.
         blocks = [b for b in sanitize_for_api(m["content"]) if b.get("type") != "document"]
         if not blocks:
             continue
@@ -512,9 +446,7 @@ def to_lc_messages(rows: list[dict]) -> list[BaseMessage]:
             content = [b for b in blocks if b.get("type") != "tool_use"]
             out.append(AIMessage(content=content, tool_calls=tool_calls))
             continue
-
-        # A user row that only carries tool_result blocks is the synthetic turn
-        # the old loop wrote; it becomes one ToolMessage per result.
+        
         results = [b for b in blocks if b.get("type") == "tool_result"]
         if results:
             for b in results:

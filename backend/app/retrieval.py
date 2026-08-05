@@ -1,15 +1,8 @@
 """Vector search over the user's chunks, via the match_chunks RPC.
-
 PostgREST cannot express `order by embedding <=> $1`, so ranking lives in the
 database function; this module embeds the query, passes metadata filters
 through, and applies the relevance threshold. RLS applies inside the RPC
-(security invoker), so a user can only ever search their own chunks.
-
-Filters are applied by the RPC in its WHERE clause, never here. That ordering
-is the point: filtering in Python after the top-k comes back can only remove
-rows the ranking already picked, so a filter excluding the top 5 would return
-nothing instead of the next 5.
-"""
+(security invoker), so a user can only ever search their own chunks."""
 
 import logging
 from dataclasses import dataclass, field
@@ -108,9 +101,7 @@ class Filters:
         return ", ".join(parts) or "none"
 
     def to_rpc(self) -> dict:
-        # An empty list must become null, not an empty array: `= any('{}')` is
-        # false for every row, so an empty array would filter everything out
-        # rather than filtering nothing.
+        # An empty list must become null, not an empty array
         return {
             "filter_doc_types": self.doc_types or None,
             "filter_source_orgs": self.source_orgs or None,
@@ -141,10 +132,6 @@ def search(
 
     vector = embed_query(query)
 
-    # min_similarity=0 on purpose: the threshold is applied here, after
-    # logging, so near-misses are visible. Scores the RPC filtered out would
-    # never appear anywhere, and those logs are the raw material for the
-    # Module 9 golden set.
     res = db.rpc(
         "match_chunks",
         {
@@ -166,9 +153,7 @@ def search(
             "PASS" if h.similarity >= threshold else "below-threshold",
         )
     if not hits:
-        # A filter that matched no documents is a different event from a corpus
-        # with nothing relevant in it, and the Module 9 golden set needs to be
-        # able to tell them apart after the fact.
+
         log.info(
             "retrieval query=%r filters=[%s] matched no rows",
             query, filters.describe(),
@@ -208,18 +193,6 @@ def search_keyword(
 
 
 def count_matching(db: Client, term: str, max_rows: int = 200) -> list[dict]:
-    """Documents whose text contains `term`, with per-document match counts.
-
-    Counting happens in the database, not here, and that is the whole point.
-    Aggregating in Python would mean fetching one row per matching chunk
-    through PostgREST, whose default row cap would silently truncate on a large
-    corpus -- reproducing the exact bug this exists to fix, but harder to see.
-
-    LEXICAL, not semantic. This counts documents containing the WORD; a
-    document discussing the subject in different words is not counted. Callers
-    must say so, or "4 documents mention forecasting" gets read as "4 documents
-    are about forecasting".
-    """
     res = db.rpc(
         "count_documents_matching", {"search_term": term, "max_rows": max_rows}
     ).execute()
@@ -250,9 +223,6 @@ def rrf_fuse(rankings: list[list[Hit]], k: int = 60) -> list[Hit]:
     for ranking in rankings:
         for rank, hit in enumerate(ranking, start=1):
             scores[hit.id] = scores.get(hit.id, 0.0) + 1.0 / (k + rank)
-            # Keep the richest copy of each chunk: channels return the same row
-            # but populate different score fields, so merge rather than
-            # overwrite or the keyword rank is lost when vector wins.
             if hit.id in best:
                 existing = best[hit.id]
                 existing.similarity = max(existing.similarity, hit.similarity)
@@ -292,16 +262,6 @@ def hybrid_search(
     ]
     fused = rrf_fuse(channels, k=settings.rrf_k)
 
-    # The relevance gate. Fusion reorders, it does not judge -- and the vector
-    # channel was queried unthresholded so RRF could see a full ranking, so
-    # without this every query returns k chunks no matter how irrelevant, and
-    # the model stops declining. Module 2 verified that declining behaviour
-    # explicitly; hybrid must not quietly delete it.
-    #
-    # A hit survives on EITHER channel's evidence: a cosine above the
-    # threshold, or a genuine lexical match. The union matters -- gating the
-    # fused list on cosine alone would discard every keyword-only hit, which is
-    # the entire reason the keyword channel exists.
     fused = [
         h for h in fused
         if h.similarity >= settings.retrieval_min_similarity or h.keyword_rank is not None
@@ -312,15 +272,6 @@ def hybrid_search(
 
         fused = rerank(query, fused[:depth], top_k=k)
 
-        # Abstention is a QUERY-level decision, not a per-passage filter: if
-        # the best passage in the corpus is not relevant, nothing is; if it is,
-        # the rest of the ranked list is the supporting context.
-        #
-        # Filtering per hit instead measurably costs recall -- relevant
-        # passages ranked 2nd or 3rd legitimately score -3 to -5 while the top
-        # hit scores +7, so a single cutoff applied to every hit prunes good
-        # context. Measured: per-hit gating dropped passage hit rate from 100%
-        # to 83.3% while adding nothing to abstention.
         if (
             settings.rerank_min_score is not None
             and fused
@@ -331,16 +282,6 @@ def hybrid_search(
                 query, fused[0].rerank_score or 0.0, settings.rerank_min_score,
             )
             fused = []
-
-        # Having decided the query IS answerable, drop passages far below the
-        # winner. Query-level gating alone keeps the whole top-k, so a question
-        # with three good sources still returns five -- and the two passengers
-        # are shown to the user as sources, which costs more trust than the
-        # tokens cost context.
-        #
-        # Relative, not absolute: a good passage's score depends on how
-        # answerable the question is at all, so the best hit for one question
-        # can score below the fifth hit of another.
         elif fused and settings.rerank_relative_drop is not None:
             best = fused[0].rerank_score or 0.0
             kept = [

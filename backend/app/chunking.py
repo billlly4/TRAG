@@ -30,11 +30,6 @@ class Chunk:
     ordinal: int
     content: str
     token_count: int
-
-    # Markdown heading path this chunk starts under. Free provenance: docling
-    # already emits headings, so this costs no LLM call. It is what lets a
-    # citation say which section a passage came from, and it is prepended to
-    # the embedding input so a chunk is findable by its section's subject.
     section: str | None = None
 
 
@@ -76,12 +71,9 @@ def _split_blocks(text: str) -> list[tuple[str, str | None]]:
     for line in text.splitlines():
         heading = _HEADING.match(line)
         if heading:
-            # Flush first: the preceding text belongs to the OLD section.
             flush_table()
             flush_para()
             level = len(heading.group(1))
-            # Pop siblings and deeper levels; an h2 replaces the previous h2
-            # and everything nested under it, but keeps the h1 above it.
             while stack and stack[-1][0] >= level:
                 stack.pop()
             stack.append((level, heading.group(2)))
@@ -101,12 +93,6 @@ def _split_blocks(text: str) -> list[tuple[str, str | None]]:
 
 
 def _split_table(block: str, target_chars: int) -> list[str]:
-    """Split an oversized table by rows, repeating the header on every piece.
-
-    A table split mid-row leaves a chunk reading `| 4.2 | 891 |` --
-    semantically meaningless and unretrievable. The header row is what makes
-    each piece stand alone.
-    """
     lines = block.splitlines()
     header: list[str] = []
     rows = lines
@@ -130,11 +116,6 @@ def _split_table(block: str, target_chars: int) -> list[str]:
 
 
 def _split_recursive(text: str, target_chars: int, depth: int = 0) -> list[str]:
-    """Split on descending separators; hard-cut when none remain.
-
-    The hard cut matters: a 5,000-char run with no separators at all must
-    still split rather than emitting one oversized chunk.
-    """
     if len(text) <= target_chars:
         return [text]
     if depth >= len(_SEPARATORS):
@@ -171,9 +152,6 @@ def chunk_text(text: str) -> list[Chunk]:
         else:
             pieces.extend((p, sect) for p in _split_recursive(block, target_chars))
 
-    # Pass 2: pack pieces into chunks, carrying overlap between neighbours.
-    # Overlap is whole trailing pieces (never a sliced table or mid-word cut),
-    # capped by the overlap budget.
     chunks: list[Chunk] = []
     current: list[tuple[str, str | None]] = []
     current_len = 0

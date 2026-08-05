@@ -16,10 +16,6 @@ export function DropZone({
   const [over, setOver] = useState(false)
   const [rejected, setRejected] = useState<string | null>(null)
 
-  // dragenter/dragleave also fire when the pointer crosses *child* elements, so
-  // a naive boolean flickers the overlay on every internal boundary. Counting
-  // enters against leaves is the reliable way to know when the cursor has
-  // actually left the container.
   const depth = useRef(0)
 
   function reset() {
@@ -29,9 +25,6 @@ export function DropZone({
 
   return (
     <div
-      // min-h-0: flex items refuse to shrink below their content by default,
-      // which would let a long conversation grow this column past the viewport
-      // and turn the page into the scroll container.
       className="relative flex min-h-0 flex-1 flex-col"
       onDragEnter={(e) => {
         e.preventDefault()

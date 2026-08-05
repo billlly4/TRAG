@@ -34,13 +34,8 @@ from .config import get_settings
 
 log = logging.getLogger(__name__)
 
-# Only the head of the document is sent. Titles, authors, publishers and dates
-# live at the front; sending a 200-page textbook to answer "what is this?"
-# would cost more than the rest of the pipeline combined.
 METADATA_INPUT_CHARS = 24_000
 
-# Bounds the structured response. The schema is small and the summary is
-# capped at a few sentences, so this is generous.
 METADATA_MAX_TOKENS = 1024
 
 
@@ -163,19 +158,6 @@ def extract_metadata(
         return None, "No text to extract metadata from"
 
     try:
-        # `with_structured_output` rather than a raw Anthropic call. The old
-        # version had to use `beta.messages.parse` specifically, because
-        # LangSmith's wrap_anthropic patches the beta path and not the stable
-        # one -- the stable call worked but was invisible in tracing. LangChain
-        # traces natively, so that constraint is gone along with the workaround.
-        #
-        # PROMPT AND SCHEMA ARE UNCHANGED, deliberately: prompt_fingerprint()
-        # hashes both into config_hash, so editing either here would mark every
-        # document in every corpus stale and force a full re-ingest.
-        #
-        # include_raw keeps the underlying message reachable, which the
-        # truncation check below needs -- the parsed-only form discards
-        # stop_reason.
         model = ChatAnthropic(
             model=settings.metadata_model,
             api_key=settings.anthropic_api_key,
@@ -197,10 +179,6 @@ def extract_metadata(
         raw = result.get("raw")
         stop_reason = (getattr(raw, "response_metadata", None) or {}).get("stop_reason")
 
-        # A truncated structured response is unparseable, not merely short, so
-        # this is usually caught below -- but check explicitly, because a
-        # schema that just fits produces a valid object built from a cut-off
-        # reading of the document.
         if stop_reason == "max_tokens":
             return None, "Metadata extraction hit max_tokens"
 

@@ -1,10 +1,3 @@
-"""Supabase JWT verification.
-
-Verification happens locally against Supabase's JWKS endpoint. The alternative,
-calling `supabase.auth.get_user(token)`, costs a network round-trip on every
-single request; PyJWKClient caches the signing keys instead.
-"""
-
 import jwt
 from fastapi import HTTPException, status
 from jwt import PyJWKClient
@@ -26,13 +19,6 @@ def _jwks(settings: Settings) -> PyJWKClient:
 
 
 def verify_token(token: str, settings: Settings) -> dict:
-    """Return the token's claims, or raise 401.
-
-    `audience` and `issuer` are validated, not just the signature. A token
-    signed by the right key but minted for a different audience is still not a
-    valid credential for this API -- omitting that check is the usual mistake
-    and makes the whole verification close to worthless.
-    """
     try:
         signing_key = _jwks(settings).get_signing_key_from_jwt(token)
         return jwt.decode(

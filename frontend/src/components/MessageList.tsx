@@ -27,8 +27,8 @@ function Bubble({
       <div
         className={
           mine
-            ? 'max-w-[75%] rounded-2xl rounded-br-sm bg-indigo-600 px-4 py-2.5 text-sm whitespace-pre-wrap text-white'
-            : 'max-w-[75%] rounded-2xl rounded-bl-sm border border-zinc-200 bg-white px-4 py-2.5 text-sm whitespace-pre-wrap text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100'
+            ? 'max-w-[88%] rounded-2xl rounded-br-sm bg-indigo-600 px-4 py-2.5 text-sm break-words whitespace-pre-wrap text-white sm:max-w-[75%]'
+            : 'max-w-[88%] rounded-2xl rounded-bl-sm border border-zinc-200 bg-white px-4 py-2.5 text-sm break-words whitespace-pre-wrap text-zinc-800 sm:max-w-[75%] dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100'
         }
       >
         {children}
@@ -100,13 +100,6 @@ function SourceList({ sources }: { sources: Source[] }) {
   )
 }
 
-/**
- * A metadata query and what it returned.
- *
- * The SQL is shown, not hidden behind "queried your documents". A count is a
- * claim about the whole corpus, and the only way to judge whether it is the
- * right count is to see which rows were counted.
- */
 function SqlBlock({ result }: { result: SqlResult }) {
   return (
     <details className="my-1 text-xs text-zinc-500 dark:text-zinc-400">
@@ -127,15 +120,6 @@ function SqlBlock({ result }: { result: SqlResult }) {
   )
 }
 
-/**
- * An exact count over document contents.
- *
- * Rendered as its own thing rather than as a source list, because it is a
- * different kind of claim: a total across every document, not a ranked sample.
- * The literal-matching caveat is shown rather than left to the prose — "4
- * documents mention forecasting" reads as "4 documents are about forecasting",
- * and only one of those is what was measured.
- */
 function CountBlock({ result }: { result: CountResult }) {
   if (result.count === null) {
     return (
@@ -172,13 +156,6 @@ function CountBlock({ result }: { result: CountResult }) {
   )
 }
 
-/**
- * Pages returned by web search.
- *
- * Rendered distinctly from document passages on purpose: once an answer can
- * draw on both, "where did this come from" stops being obvious, and a web claim
- * that looks like a corpus claim is the failure worth designing against.
- */
 function WebSourceList({ results }: { results: WebResult[] }) {
   if (results.length === 0) return null
   return (
@@ -215,7 +192,6 @@ function WebSourceList({ results }: { results: WebResult[] }) {
   )
 }
 
-/** Citation spans only exist on Module 1 answers; kept so old threads render. */
 function Citations({ message }: { message: Message }) {
   const cites = blocksToCitations(message.content)
   if (cites.length === 0) return null
@@ -269,7 +245,7 @@ export function MessageList({
   }, [messages.length, streamText, liveTools.length])
 
   return (
-    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-6">
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3 sm:p-6">
       {messages.length === 0 && !streaming && (
         <p className="pt-12 text-center text-sm text-zinc-400">
           Ask a question. Uploaded documents are searched automatically.
@@ -277,17 +253,10 @@ export function MessageList({
       )}
 
       {messages.map((m) => {
-        // Synthetic user turns that only carry tool results render as
-        // attribution, not as something the user said. A turn may carry both
-        // kinds when the model ran a search and a metadata query together.
         if (m.role === 'user' && isToolResultMessage(m)) {
           const sqls = toolSqlResults(m.content)
           const counts = toolCounts(m.content)
           const sources = toolSources(m.content)
-          // "No relevant passages found" is only true of a SEARCH that found
-          // none. A metadata query or an exact count legitimately carries no
-          // passages, and printing it over the top of them contradicts a
-          // complete answer.
           const showSources = sources.length > 0 || (sqls.length === 0 && counts.length === 0)
           return (
             <div key={m.id}>
