@@ -1,12 +1,39 @@
+<div align="center">
+
 # TRAG
 
 **Ask questions about your own documents, and get answers you can check.**
+
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![Postgres](https://img.shields.io/badge/Postgres-pgvector-4169E1?logo=postgresql&logoColor=white)
+[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+
+</div>
 
 Upload a PDF, a spreadsheet, a stack of lecture slides. Ask a question in plain
 language. TRAG finds the relevant passages, answers from them, and shows you
 exactly which file, section and paragraph each claim came from.
 
 And when your documents don't contain the answer, it says so.
+
+---
+
+## Contents
+
+- [Why that last part matters](#why-that-last-part-matters)
+- [What it can do](#what-it-can-do)
+- [How it works](#how-it-works)
+- [Architecture](#architecture)
+- [The database](#the-database)
+- [Getting started](#getting-started)
+- [Deployment](#deployment)
+- [Evaluation](#evaluation)
+- [Design decisions](#design-decisions)
+- [Project structure](#project-structure)
+- [Limits](#limits)
+- [Not doing (for now)](#not-doing-for-now)
 
 ---
 
@@ -160,6 +187,62 @@ different machine.
 
 ---
 
+## The database
+
+Roughly 1,200 lines of SQL, and more of the interesting work lives here than
+anywhere else in the project. One principle governs all of it:
+
+> **Authorization belongs in the database, not in the API.**
+
+The browser holds a real user token and can reach Postgres directly through
+PostgREST. So a rule that only exists in a request handler isn't a rule, it's a
+suggestion. Every limit and every boundary here is enforced where the data is.
+
+| File | What it sets up |
+|---|---|
+| `0001_core.sql` | Tables, indexes, row-level security, file storage, live updates |
+| `0002_retrieval.sql` | Both search channels and the exact-count function |
+| `0003_quotas.sql` | Per-account limits, enforced by triggers |
+| `0004_ingest_queue.sql` | The durable job queue and the worker's five functions |
+| `0005_metadata_sql.sql` | The read-only view and role behind the SQL tool |
+
+Four things in there are worth a closer look.
+
+**No master key, anywhere.** Supabase hands out a `service_role` key that
+bypasses every security policy. It would have made several problems disappear,
+which is exactly why it isn't used. Even the background worker, which has no
+logged-in user behind it, gets no such key: it signs in as its own account, and
+its entire reach into the database is five functions that each take a **job id**
+rather than a user id. It cannot name whose data it wants to touch. It can only
+act on work it was handed.
+
+**Privilege used backwards.** The SQL tool lets the model write real queries,
+which sounds alarming until you see what runs them. `SECURITY DEFINER` normally
+*raises* privilege; here it lowers it. The function is owned by a role that
+cannot log in and can read exactly one view, so `delete from documents` fails
+because the permission does not exist, not because a filter caught the word
+"delete". Pattern-matching model-written SQL always leaks eventually. Permissions
+don't.
+
+**A queue that survives things dying.** Ingestion used to be a background task
+inside the API, so a restart quietly abandoned whatever was mid-flight, leaving
+documents stuck forever in a state indistinguishable from "still working". Now
+it's rows in Postgres. Workers claim jobs with `SKIP LOCKED` so several can run
+without colliding, a job held by a worker that died goes stale and gets picked
+up by the next one, and failures retry on a widening delay rather than burning
+three attempts in ten seconds while the thing they need is still booting.
+
+**Limits that actually bite.** Chats, storage and message counts are enforced by
+triggers. The API checks the same numbers first, but only so you get a readable
+message instead of a raw database error. The trigger is the enforcement; the
+handler is the manners.
+
+Every file ends with a block of commented checks meant to be pasted into the SQL
+editor. They're worth running: a migration that applied cleanly and a schema
+that works are different claims.
+
+---
+
 ## Getting started
 
 ### You'll need
@@ -248,7 +331,7 @@ Ollama needs to be running too. Open **http://localhost:5173**.
 
 ---
 
-## Deploying it
+## Deployment
 
 Serving and ingesting have opposite needs. Serving is light, always-on and
 latency-sensitive. Ingesting is heavy, occasional, and wants a GPU. Paying for a
@@ -305,7 +388,7 @@ docker compose up -d --build
 
 ---
 
-## Is it any good?
+## Evaluation
 
 It's measured rather than assumed. Two test suites run against a set of
 questions with known answers.
@@ -349,14 +432,14 @@ is graded by another language model; every check is mechanical.
 Retrieval for ten simultaneous users is now faster than it used to be for one.
 Two of the three fixes were embarrassing rather than clever. One was a hostname
 resolving over IPv6 and waiting for a timeout, costing two full seconds per
-request. [`findings.md`](findings.md) has the details.
+request.
 
 Multi-turn conversations also cost about **half** what they did, because the
 conversation prefix is cached between turns rather than re-sent at full price.
 
 ---
 
-## Some decisions worth explaining
+## Design decisions
 
 **Filtering happens in the database, before ranking.** Narrowing results
 afterwards can only throw away rows the ranking already chose, so a filter that
@@ -389,7 +472,7 @@ orphaned passages, no citations pointing at a file that's gone.
 
 ---
 
-## What's inside
+## Project structure
 
 ```
 backend/
@@ -403,8 +486,7 @@ backend/
   worker/           drains the ingest queue
   evaluation/       the test suites
 frontend/src/       the React app
-supabase/schema/    tables, security policies, search functions
-findings.md         every measurement, and what was learned the hard way
+supabase/schema/    tables, RLS policies, search functions, the ingest queue
 ```
 
 ---
