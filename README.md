@@ -14,7 +14,7 @@ And when your documents don't contain the answer, it says so.
 
 Most retrieval systems always return something. Ask about a topic your files
 never mention and you'll still get five passages and a confident paragraph
-built out of them — because the machinery had no way to say "nothing here fits".
+built out of them, because the machinery had no way to say "nothing here fits".
 
 That failure is quiet. The answer looks exactly like a correct one. You only
 discover it when you go and check, which is the thing the tool was supposed to
@@ -23,10 +23,10 @@ save you from.
 TRAG is built around making that impossible. A relevance gate reads each
 candidate passage *against your actual question* and can decline the whole
 query. Getting this to work took a real measurement: it turns out embedding
-similarity cannot tell a genuine question from gibberish — both score around
-0.5 — so the gate had to be built on something that can.
+similarity cannot tell a genuine question from gibberish. Both score around 0.5,
+so the gate had to be built on something that can.
 
-> Nonsense query: 0.483 · Real question: 0.500 — no threshold separates them.
+> Nonsense query: 0.483 · Real question: 0.500. No threshold separates them.
 
 ---
 
@@ -37,8 +37,8 @@ Markdown, plain text and images. Charts and figures are described by a local
 vision model, so a question about a graph can actually find it.
 
 **Search two ways at once.** Meaning-based search finds passages that answer
-your question in different words. Keyword search finds exact terms — a part
-number, a name, "Holt's model" — that meaning-based search blurs away. Neither
+your question in different words. Keyword search finds exact terms (a part
+number, a name, "Holt's model") that meaning-based search blurs away. Neither
 alone is enough; they fail on completely different questions, so TRAG runs both
 and merges the results.
 
@@ -48,7 +48,7 @@ chapter 7 say about forecasting". TRAG recognises the difference and reaches for
 a different tool.
 
 **Count exactly.** "How many of my files mention forecasting?" gets a real
-number, counted across every document — not the size of a search result, which
+number, counted across every document, not the size of a search result, which
 would only ever measure the search.
 
 **Show its work.** Every answer carries its sources: file, section, passage and
@@ -56,8 +56,8 @@ relevance. Metadata answers show the query that produced them. Web results are
 labelled as coming from outside your documents.
 
 **Stay yours.** Every table is protected by row-level security, so one account
-can never read another's files — enforced by the database itself, not by the
-application asking nicely.
+can never read another's files. That is enforced by the database itself, not by
+the application asking nicely.
 
 ---
 
@@ -80,9 +80,9 @@ boundaries, and each is turned into a vector for searching.
 One detail worth calling out, because it is the difference between a passage
 being findable and invisible: a chunk reading *"margins fell 4% year over year"*
 never says **whose** margins. So the document title and heading path are
-prepended before embedding — the passage becomes retrievable by its own subject,
-without those words being fed back to the model as if they were part of the
-text.
+prepended before embedding, and the passage becomes retrievable by its own
+subject without those words being fed back to the model as if they were part of
+the text.
 
 You watch all of this happen live. Status flows straight from the database to
 your browser, so the badge moves through *extracting → analyzing → chunking →
@@ -98,13 +98,13 @@ embedding → ready* without a refresh.
 
 The agent decides what the question needs. For a content question, both search
 channels run, their rankings are merged, and a cross-encoder re-reads the
-survivors against your question — this is the step that can decline. What
+survivors against your question. That is the step that can decline. What
 survives goes to Claude along with an instruction not to fill gaps from general
 knowledge.
 
 If you named a specific file, the search is narrowed to it inside the database,
 *before* ranking. Doing it afterwards would mean discarding whatever the ranking
-already picked — for a set of related chapters, usually everything.
+already picked, which for a set of related chapters is usually everything.
 
 ---
 
@@ -134,13 +134,13 @@ flowchart LR
 | Piece | What it does |
 |---|---|
 | **API** | Authentication, chat, uploads, streaming responses |
-| **Extractor** | Reads documents. Separate on purpose — see below |
+| **Extractor** | Reads documents. Separate on purpose (see below) |
 | **Worker** | Drains the ingest queue: extract, caption, chunk, embed |
 | **Supabase** | Postgres with vector search, plus auth, file storage and live updates |
 
 The extractor is its own process because the document-reading library wraps
 native code that can crash hard. It did once, taking the whole API down with it.
-Isolated, a bad file costs one document instead of the server — and that same
+Isolated, a bad file costs one document instead of the server. That same
 isolation later turned out to be what lets ingestion run on a completely
 different machine.
 
@@ -152,7 +152,7 @@ different machine.
 | Backend | Python · FastAPI · server-sent events |
 | Agent | LangGraph · LangChain tools |
 | Model | Claude (Anthropic Messages API) |
-| Database | Supabase — Postgres, pgvector, Auth, Storage, Realtime |
+| Database | Supabase (Postgres, pgvector, Auth, Storage, Realtime) |
 | Embeddings | `nomic-embed-text` via Ollama |
 | Relevance | `ms-marco-MiniLM-L-6-v2` cross-encoder |
 | Reading files | docling · `qwen2.5vl` for figures |
@@ -174,7 +174,7 @@ different machine.
   ollama pull qwen2.5vl:7b
   ```
 
-An NVIDIA GPU is optional but very welcome — relevance scoring uses it
+An NVIDIA GPU is optional but very welcome. Relevance scoring uses it
 automatically and is roughly 15× faster there.
 
 ### Install
@@ -188,7 +188,7 @@ cd frontend && npm install
 
 Run the five files in [`supabase/schema/`](supabase/schema/) **in order**, in
 the Supabase SQL editor. Each one ends with a commented block of checks worth
-running — a file that applied cleanly and a schema that works are different
+running. A file that applied cleanly and a schema that works are different
 claims.
 
 Then create an account for the ingest worker and register it:
@@ -200,7 +200,7 @@ select id, 'local-worker' from auth.users
 ```
 
 > Use a non-routable domain like `.invalid` so the account can't be recovered
-> by email. **Skip this step and nothing will ever finish processing** — uploads
+> by email. **Skip this step and nothing will ever finish processing.** Uploads
 > will sit at *pending* forever with no error to explain why.
 
 ### Configure
@@ -217,7 +217,7 @@ INGEST_WORKER_PASSWORD=
 
 CORS_ORIGINS=http://localhost:5173
 
-# Frontend — only VITE_ variables reach the browser
+# Frontend: only VITE_ variables reach the browser
 VITE_SUPABASE_URL=
 VITE_SUPABASE_PUBLISHABLE_KEY=
 VITE_API_BASE_URL=http://127.0.0.1:8000
@@ -273,14 +273,14 @@ So they're split:
 ```
 
 This needed **no code changes at all**, which is the nice part. The job queue
-already lived in Postgres so that ingestion could survive a server restart —
-and a queue that survives a restart turns out to be a queue that doesn't care
-which continent the worker is on. The worker never talks to the API; it only
-claims jobs from the database.
+already lived in Postgres so that ingestion could survive a server restart, and
+a queue that survives a restart turns out to be a queue that doesn't care which
+continent the worker is on. The worker never talks to the API; it only claims
+jobs from the database.
 
 With the workstation off, chat, search and citations all keep working. Uploads
 are accepted and wait. Switch it on and the queue drains, with each status
-change appearing live in the browser — driven by a machine on someone's desk.
+change appearing live in the browser, driven by a machine on someone's desk.
 
 ```bash
 cp .env.deploy.example .env       # on the server, then fill it in
@@ -291,15 +291,15 @@ docker compose up -d --build
 **Five things that cost an afternoon if you miss them:**
 
 1. **Turn off public signup in Supabase before sharing the URL.** Quotas limit
-   what one account can do — not how many accounts exist. Every signup spends
+   what one account can do, not how many accounts exist. Every signup spends
    your Anthropic credit. Set a billing limit too.
 2. **Build the image on the server**, not on your laptop. The local setup pins a
    CUDA build of PyTorch that doesn't exist for the server's architecture.
 3. **Rebuild the frontend when the API address changes.** It's baked in at build
    time; restarting does nothing.
 4. **Caddy needs a hostname, not an IP address.** Certificates are then issued
-   automatically — there's no certificate step to run.
-5. **Cloud providers often have two firewalls** — theirs and the machine's own.
+   automatically. There is no certificate step to run.
+5. **Cloud providers often have two firewalls:** theirs and the machine's own.
    Traffic allowed by one and blocked by the other looks like a hang, not a
    refusal.
 
@@ -310,7 +310,7 @@ docker compose up -d --build
 It's measured rather than assumed. Two test suites run against a set of
 questions with known answers.
 
-**Retrieval** — does the right passage come back?
+**Retrieval.** Does the right passage come back?
 
 | Approach | Finds the answer | Knows when to decline |
 |---|---|---|
@@ -319,12 +319,12 @@ questions with known answers.
 | Both, merged | 88.9% | 0% |
 | Both + relevance gate | **100%** | **100%** |
 
-The last row is the whole argument. Merging the two searches ranks *perfectly* —
+The last row is the whole argument. Merging the two searches ranks *perfectly*
 and still scores 88.9%, because merging produces no score you can threshold on,
 so it happily returns passages for a question it should refuse. Ranking well and
 knowing when to stay quiet are separate skills.
 
-**Answers** — does the agent behave? This one drives the real thing and checks
+**Answers.** Does the agent behave? This one drives the real thing and checks
 what retrieval scores can't see: did it pick the right tool, did a search naming
 one file actually get scoped to it, did a passage leak in from the wrong
 document, did the answer cite something no tool returned.
@@ -336,8 +336,8 @@ uv run python -m backend.evaluation.answers   # agent behaviour
 
 Every question runs three times, and results are reported as `2/3` rather than
 averaged. The agent isn't deterministic, and a partial pass is more dangerous
-than a clean failure — it looks like success on a lucky run. Nothing here is
-graded by another language model; every check is mechanical.
+than a clean failure, because it looks like success on a lucky run. Nothing here
+is graded by another language model; every check is mechanical.
 
 ### Speed
 
@@ -347,7 +347,7 @@ graded by another language model; every check is mechanical.
 | Ten users at once (p95) | 15305 ms | **1045 ms** |
 
 Retrieval for ten simultaneous users is now faster than it used to be for one.
-Two of the three fixes were embarrassing rather than clever — one was a hostname
+Two of the three fixes were embarrassing rather than clever. One was a hostname
 resolving over IPv6 and waiting for a timeout, costing two full seconds per
 request. [`findings.md`](findings.md) has the details.
 
@@ -359,7 +359,7 @@ conversation prefix is cached between turns rather than re-sent at full price.
 ## Some decisions worth explaining
 
 **Filtering happens in the database, before ranking.** Narrowing results
-afterwards can only throw away rows the ranking already chose — so a filter that
+afterwards can only throw away rows the ranking already chose, so a filter that
 excludes the top 5 gives you nothing instead of the next 5.
 
 **Narrowing to one document doesn't lower the bar.** Scoping a search changes
@@ -370,10 +370,10 @@ bad paragraph in it.
 **The SQL tool is limited by database permissions, not by inspecting the SQL.**
 The model writes real queries, which run as a role that can read exactly one
 view and nothing else. `delete from documents` fails because the permission
-isn't there — not because a pattern matched. Checking model-written SQL with
+isn't there, not because a pattern matched. Checking model-written SQL with
 pattern rules always leaks; permissions don't.
 
-**Web search only exists when you ask for it.** Not disabled — *absent*. If you
+**Web search only exists when you ask for it.** Not disabled: *absent*. If you
 haven't ticked the box, the tool isn't offered to the model, so it cannot be
 called by accident.
 
