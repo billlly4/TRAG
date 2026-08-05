@@ -1,0 +1,53 @@
+# Caddy terminates TLS, serves the built frontend, and proxies /api to the API
+# container. Certificates are requested and renewed automatically once DNS
+# points at this host -- there is no certbot step.
+#
+# Set DOMAIN in .env (e.g. trag.example.com). For a first test without a
+# hostname, replace the site address with `:80` and Caddy serves plain HTTP --
+# fine for checking the stack works, not for anything you sign into.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# The API. Everything under /api goes to the container; the browser sees one
+	# origin, which also means CORS never fires for the deployed app. CORS_ORIGINS
+	# still matters for local development against this API.
+	handle /api/* {
+		reverse_proxy api:8000 {
+			# Chat streams over SSE. Without this Caddy buffers the response and
+			# the answer arrives in one lump at the end -- the streaming works,
+			# invisibly, which is the annoying kind of broken.
+			flush_interval -1
+
+			# Agent turns can run tens of seconds with tool calls. The default
+			# would cut a long answer off mid-stream.
+			transport http {
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+
+	# Everything else is the React bundle. try_files sends unknown paths to
+	# index.html so client-side routing survives a page reload.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		# Supabase Auth stores its session in localStorage, so an XSS is a session
+		# theft. These are cheap and reduce that surface.
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		# HSTS is deliberately absent: it is hard to undo if the domain is
+		# reused, and this is a test deployment. Add it when the host is settled.
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

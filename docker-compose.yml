@@ -1,0 +1,104 @@
+# The serving half of the deployment. Ingestion is not here on purpose: the
+# extractor, the ingest worker and qwen2.5vl stay on the machine with the GPU
+# and reach this stack only through Supabase. See README "Deployment".
+#
+#   docker compose up -d --build
+#
+# Reads .env from this directory. That file holds real keys and is gitignored
+# and dockerignored -- values arrive through the environment at run time, never
+# baked into an image layer.
+
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Overrides whatever .env says. Inside the compose network Ollama is
+      # reachable by service name, and 127.0.0.1 would point the API at its own
+      # container -- where nothing is listening.
+      OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    # No ports. Caddy is the only thing the internet talks to; the API is
+    # reachable only on the compose network.
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health').read()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      # Named volume, so the model survives `docker compose down`. Without it
+      # every restart re-downloads nomic-embed-text and the first query after a
+      # deploy hangs instead of answering.
+      - ollama-models:/root/.ollama
+    expose:
+      - "11434"
+    healthcheck:
+      # Checks the MODEL is present, not just that the server answers. Ollama
+      # accepts connections long before a pull finishes, so a port check would
+      # let the API start and then fail every embedding with a 404 -- which
+      # surfaces as "search unavailable" rather than as a missing model.
+      test: ["CMD-SHELL", "ollama list | grep -q nomic-embed-text"]
+      interval: 10s
+      timeout: 5s
+      start_period: 300s
+      retries: 30
+
+  # Pulls the embedding model once, then exits. Separate from the ollama service
+  # because baking a pull into that container's command means re-running it on
+  # every restart, and because a one-shot job that fails is easier to see than a
+  # server that started but is missing a model.
+  #
+  # ONLY nomic-embed-text. qwen2.5vl:7b is ~6 GB and is used solely for figure
+  # captioning during ingestion, which does not happen here.
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "until ollama list >/dev/null 2>&1; do echo 'waiting for ollama'; sleep 2; done;
+       ollama pull nomic-embed-text && echo 'nomic-embed-text ready'"
+    restart: "no"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      # The Caddyfile's site address is `{$DOMAIN}`, which Caddy expands from
+      # ITS OWN container environment -- not from compose's .env substitution.
+      # Without this line Caddy starts with an empty site address and serves
+      # nothing, while compose looks correct.
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env, e.g. trag.example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The built frontend. Produced by `npm run build` with VITE_API_BASE_URL
+      # set to the public origin -- Vite inlines it at build time, so a bundle
+      # built with the wrong value cannot be fixed by changing the environment.
+      - ./frontend/dist:/srv:ro
+      # Issued certificates. Losing this volume means re-requesting them, and
+      # Let's Encrypt rate-limits that.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+
+volumes:
+  ollama-models:
+  caddy-data:
+  caddy-config:

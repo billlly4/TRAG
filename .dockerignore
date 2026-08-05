@@ -1,0 +1,39 @@
+# Everything Docker would otherwise upload as build context.
+#
+# The two entries that matter are .venv and .env. The virtualenv is 4.7 GB --
+# 4.0 GB of it a CUDA torch build that is wrong for the server anyway -- and
+# .env holds the real Anthropic key, the Supabase keys, and the ingest worker's
+# password. Without this file both are copied into the build context, the secret
+# ones land in an image layer, and `docker history` reads them straight back
+# out. Secrets reach the container through the environment at RUN time, never
+# through a COPY.
+
+.venv/
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Built on the server with its own VITE_API_BASE_URL, so a local build would be
+# baked with the wrong API origin. Vite inlines env vars at build time.
+frontend/node_modules/
+frontend/dist/
+
+# Not part of the running application.
+agentic-rag-plan/
+backend/evaluation/
+supabase/
+.git/
+.github/
+*.md
+!README.md
+
+# Local tooling noise
+.vscode/
+.idea/
+.claude/
