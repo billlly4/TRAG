@@ -365,6 +365,51 @@ With the workstation off, chat, search and citations all keep working. Uploads
 are accepted and wait. Switch it on and the queue drains, with each status
 change appearing live in the browser, driven by a machine on someone's desk.
 
+### What it actually runs on
+
+Nothing here is Azure-specific, but concretely, this is the live setup:
+
+| | |
+|---|---|
+| **Server** | A small B-series Azure VM in Sweden Central, Ubuntu |
+| **Stack** | Four containers via Docker Compose: Caddy, the API, Ollama, and a one-shot job that pulls the embedding model |
+| **HTTPS** | Caddy, with a Let's Encrypt certificate issued automatically on first boot |
+| **Hostname** | Azure's free DNS label on the public IP, so the address survives a restart even if the IP changes |
+| **Image** | ~2.9 GB, built on the VM |
+| **Database** | Supabase free tier |
+| **Ingestion** | A desktop with an RTX 3060, running the worker and extractor only |
+
+The server has no GPU and never needs one. It only embeds queries, which is
+small work, and scores relevance on CPU. Everything expensive happens on the
+desktop, which is off most of the time.
+
+Cost control worth copying: the VM has a daily auto-shutdown, Supabase is free
+tier, and there's a hard spend limit on the Anthropic account. A public URL
+attached to a metered API is the one part of this that can hurt you.
+
+### Why it's shaped this way
+
+Every choice above is a budget decision, not a claim about the best possible
+design. This was built on six dollars of Claude credits, and that number shaped
+more than you would expect. Evaluation runs cost real money, so the golden set
+is small and deliberate rather than large and thorough.
+
+With a different budget the same code arranges differently. More money and
+everything moves onto Azure, GPU VM included, and nothing depends on a desktop
+being switched on. Less money, or more privacy pressure, and the whole thing
+stays local. Better hardware and the vision model stops being the reason
+ingestion is slow. None of that touches the application code, which is the point
+of splitting it at the queue.
+
+The seam most worth pointing at: Claude is doing two different jobs here.
+Writing answers, and deciding which tool to reach for. The second is a far
+smaller problem than the first, and a local model could plausibly handle it.
+Splitting them would cut the per-question cost substantially, at the price of
+another component to run and evaluate. Not worth it at this scale. It might be
+at yours.
+
+### Deploying it yourself
+
 ```bash
 cp .env.deploy.example .env       # on the server, then fill it in
 cd frontend && npm run build      # VITE_API_BASE_URL must be the public URL
